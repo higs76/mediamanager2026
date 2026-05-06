@@ -32,11 +32,10 @@ fi
 log_info "Checking Proxmox environment..."
 log_success "Running on Proxmox VE"
 
-# Obtenir le prochain CTID
+# Obtenir le prochain CTID disponible (LXC ou VM)
 log_info "Finding next available Container ID..."
-LAST=$(pct list 2>/dev/null | tail -n +2 | awk '{print $1}' | sort -rn | head -1)
-CTID=$((${LAST:-99} + 1))
-while pct status $CTID &>/dev/null; do
+CTID=100
+while pct status $CTID 2>/dev/null || qm status $CTID 2>/dev/null; do
     CTID=$((CTID + 1))
 done
 log_success "Using Container ID: $CTID"
