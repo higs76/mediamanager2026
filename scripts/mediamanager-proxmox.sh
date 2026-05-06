@@ -21,8 +21,8 @@ CTID="auto"                           # Container ID (auto = prochain disponible
 VMBRIDGE="vmbr0"                      # Bridge réseau
 STORAGE="local-lvm"                   # Storage principal
 HOSTNAME="mediamanager"               # Hostname du LXC
-IP="192.168.1.100/24"                # IP du LXC (format CIDR)
-GATEWAY="192.168.1.1"                 # Gateway
+IP="dhcp"                             # IP (dhcp ou format CIDR: 192.168.1.100/24)
+GATEWAY=""                            # Gateway (vide = auto-détection)
 CORES="2"                             # CPU cores
 MEMORY="4096"                         # RAM en MB
 DISK="50"                             # Disque en GB
@@ -182,10 +182,10 @@ interactive_mode() {
     read -p "Enter Hostname (default: mediamanager): " input
     if [ ! -z "$input" ]; then HOSTNAME="$input"; fi
     
-    read -p "Enter IP/CIDR (default: 192.168.1.100/24): " input
+    read -p "Enter IP/CIDR or 'dhcp' (default: dhcp): " input
     if [ ! -z "$input" ]; then IP="$input"; fi
     
-    read -p "Enter Gateway IP (default: 192.168.1.1): " input
+    read -p "Enter Gateway IP (default: auto-detect): " input
     if [ ! -z "$input" ]; then GATEWAY="$input"; fi
     
     read -p "Enter CPU Cores (default: 2): " input
@@ -216,7 +216,11 @@ show_configuration() {
     echo ""
     echo "  Container ID:    $CTID"
     echo "  Hostname:        $HOSTNAME"
-    echo "  IP Address:      $IP"
+    if [ "$IP" = "dhcp" ]; then
+        echo "  IP Address:      DHCP"
+    else
+        echo "  IP Address:      $IP"
+    fi
     echo "  Gateway:         $GATEWAY"
     echo "  CPU Cores:       $CORES"
     echo "  Memory:          ${MEMORY}MB"
@@ -241,8 +245,21 @@ show_configuration() {
 get_next_ctid() {
     if [ "$CTID" = "auto" ]; then
         log_info "Finding next available Container ID..."
-        CTID=$(pct list | tail -n +2 | awk '{print $1}' | sort -n | tail -1)
-        CTID=$((CTID + 1))
+        
+        # Trouver le dernier CTID utilisé
+        LAST_CTID=$(pct list 2>/dev/null | tail -n +2 | awk '{print $1}' | sort -n | tail -1)
+        
+        if [ -z "$LAST_CTID" ]; then
+            CTID=100
+        else
+            CTID=$((LAST_CTID + 1))
+        fi
+        
+        # Vérifier que le CTID est vraiment libre
+        while pct status $CTID &>/dev/null; do
+            CTID=$((CTID + 1))
+        done
+        
         log_success "Using Container ID: $CTID"
     fi
 }
@@ -285,6 +302,14 @@ check_resources() {
 create_lxc() {
     log_info "Creating LXC container $CTID..."
     
+    # Préparer la configuration réseau
+    if [ "$IP" = "dhcp" ]; then
+        NET_CONFIG="name=eth0,bridge=$VMBRIDGE,type=veth"
+        log_info "Using DHCP for networking"
+    else
+        NET_CONFIG="name=eth0,bridge=$VMBRIDGE,ip=$IP,gw=$GATEWAY,type=veth"
+    fi
+    
     pct create $CTID ubuntu-24.04-standard_24.04-1_amd64.tar.zst \
         --arch amd64 \
         --cores $CORES \
@@ -293,7 +318,7 @@ create_lxc() {
         --storage $STORAGE \
         --rootfs $ROOTFS \
         --hostname $HOSTNAME \
-        --net0 name=eth0,bridge=$VMBRIDGE,ip=$IP,gw=$GATEWAY,type=veth \
+        --net0 $NET_CONFIG \
         --unprivileged 1 \
         --onboot 1 \
         --start 1
@@ -478,6 +503,7 @@ main() {
     fi
     
     get_next_ctid
+    detect_gateway
     check_ctid
     check_resources
     show_configuration
