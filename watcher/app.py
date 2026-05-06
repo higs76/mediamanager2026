@@ -1,17 +1,22 @@
 """
 Point d'entrée principal du Watcher MediaManager
 
-Usage:
-    python -m watcher.app
-    ou
-    python watcher/app.py
+Inclut :
+- API de santé
+- API Admin Panel (dashboard, contrôle services, logs)
+- API utilisateur (future)
 """
 
 import logging
 import sys
+import os
+import subprocess
+from pathlib import Path
+from datetime import datetime
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from watcher.config import (
     API_HOST, API_PORT, API_DEBUG, PROJECT_ROOT,
@@ -33,49 +38,256 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+# Lire la version
+VERSION_FILE = PROJECT_ROOT / 'VERSION'
+if VERSION_FILE.exists():
+    APP_VERSION = VERSION_FILE.read_text().strip()
+else:
+    APP_VERSION = "0.1.0-unknown"
+
 # ==========================================
 # Créer l'app FastAPI
 # ==========================================
 app = FastAPI(
     title="MediaManager Watcher",
     description="Service de surveillance des fichiers vidéo",
-    version="0.1.0"
+    version=APP_VERSION
 )
 
 # ==========================================
-# Middleware CORS (pour accès depuis l'UI)
+# Middleware CORS
 # ==========================================
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # À restreindre en prod
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # ==========================================
-# Endpoints Health Check
+# Servir les fichiers statiques (Frontend Admin)
 # ==========================================
+static_path = PROJECT_ROOT / "frontend" / "admin"
+if static_path.exists():
+    app.mount("/admin", StaticFiles(directory=str(static_path), html=True), name="admin")
+    logger.info(f"✓ Admin frontend mounted at /admin → {static_path}")
+else:
+    logger.warning(f"⚠ Admin frontend not found at {static_path}")
+
+
+
+@app.get("/admin")
+def admin_redirect():
+    """Redirige /admin vers /admin/"""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/admin/", status_code=307)
+
+# ==========================================
+# ENDPOINTS SANTÉ
+# ==========================================
+
 @app.get("/health")
 def health_check():
-    """Endpoint de health check basique"""
+    """Endpoint simple de santé"""
     return JSONResponse({
         "status": "ok",
         "service": "mediamanager-watcher",
-        "version": "0.1.0"
+        "version": APP_VERSION
     })
 
 # ==========================================
-# Endpoints Status
+# ENDPOINTS ADMIN PANEL
 # ==========================================
-@app.get("/status")
-def get_status():
+
+@app.get("/api/admin/dashboard")
+def get_dashboard():
     """
-    Retourne le statut actuel du watcher
-    Vérifie la connexion BD, la config, etc.
+    Retourne le dashboard complet pour l'Admin Panel
+    - Version app
+    - Statut des services
+    - Statut de la BD
+    - Statut des montages
     """
     
     # Test connexion BD
+    db_ok = test_db_connection()
+    
+    # Statut watcher (on considère qu'il tourne si on reçoit cette requête)
+    watcher_running = True  # TODO: vérifier le PID du process réel
+    
+    # Statut PostgreSQL
+    postgres_running = check_postgres_running()
+    
+    # Statut montages
+    mounts_info = get_mounts_info()
+    
+    return JSONResponse({
+        "version": APP_VERSION,
+        "timestamp": datetime.now().isoformat(),
+        "services": {
+            "watcher": {
+                "name": "Watcher Service",
+                "status": "running" if watcher_running else "stopped",
+                "uptime": "unknown",  # TODO: calculer uptime réel
+                "pid": os.getpid()
+            },
+            "database": {
+                "name": "PostgreSQL",
+                "status": "connected" if db_ok else "disconnected",
+                "type": "PostgreSQL 16",
+                "database": "mediamanager_db"
+            },
+            "mounts": {
+                "name": "SMB Mounts",
+                "status": "healthy" if mounts_info["healthy"] else "degraded",
+                "total": mounts_info["total"],
+                "healthy": mounts_info["healthy"],
+                "failed": mounts_info["failed"]
+            }
+        },
+        "system": {
+            "host": get_hostname(),
+            "ip": get_local_ip(),
+            "mount_base_path": str(MOUNT_BASE_PATH)
+        }
+    })
+
+
+@app.get("/api/admin/logs")
+def get_logs(lines: int = 50):
+    """
+    Retourne les dernières lignes du fichier log
+    
+    Paramètres:
+    - lines: nombre de lignes à retourner (default: 50)
+    """
+    
+    if not LOG_FILE.exists():
+        return JSONResponse({
+            "error": f"Log file not found: {LOG_FILE}",
+            "logs": []
+        }, status_code=404)
+    
+    try:
+        log_content = LOG_FILE.read_text()
+        log_lines = log_content.split('\n')
+        
+        # Prendre les dernières N lignes
+        last_lines = log_lines[-lines:] if len(log_lines) > lines else log_lines
+        
+        return JSONResponse({
+            "file": str(LOG_FILE),
+            "total_lines": len(log_lines),
+            "returned_lines": len(last_lines),
+            "logs": last_lines
+        })
+    except Exception as e:
+        logger.error(f"Erreur lecture logs: {e}")
+        return JSONResponse({
+            "error": str(e),
+            "logs": []
+        }, status_code=500)
+
+
+@app.post("/api/admin/services/{service}/restart")
+def restart_service(service: str):
+    """
+    Redémarre un service systemd
+    
+    Services disponibles:
+    - watcher
+    - postgresql
+    """
+    
+    if service not in ["watcher", "postgresql"]:
+        return JSONResponse({
+            "error": f"Service '{service}' not recognized"
+        }, status_code=400)
+    
+    service_name = f"mediamanager-watcher" if service == "watcher" else "postgresql"
+    
+    try:
+        result = subprocess.run(
+            ["sudo", "systemctl", "restart", service_name],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        if result.returncode == 0:
+            logger.info(f"Service {service_name} redémarré")
+            return JSONResponse({
+                "status": "success",
+                "service": service,
+                "message": f"Service {service} restarted"
+            })
+        else:
+            logger.error(f"Erreur restart {service_name}: {result.stderr}")
+            return JSONResponse({
+                "status": "error",
+                "service": service,
+                "error": result.stderr
+            }, status_code=500)
+            
+    except Exception as e:
+        logger.error(f"Exception restart service: {e}")
+        return JSONResponse({
+            "status": "error",
+            "service": service,
+            "error": str(e)
+        }, status_code=500)
+
+
+@app.post("/api/admin/services/{service}/stop")
+def stop_service(service: str):
+    """
+    Arrête un service systemd
+    """
+    
+    if service not in ["watcher"]:  # On laisse PostgreSQL tranquille
+        return JSONResponse({
+            "error": f"Cannot stop service '{service}'"
+        }, status_code=400)
+    
+    service_name = "mediamanager-watcher"
+    
+    try:
+        result = subprocess.run(
+            ["sudo", "systemctl", "stop", service_name],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        if result.returncode == 0:
+            logger.info(f"Service {service_name} arrêté")
+            return JSONResponse({
+                "status": "success",
+                "service": service,
+                "message": f"Service {service} stopped"
+            })
+        else:
+            return JSONResponse({
+                "status": "error",
+                "service": service,
+                "error": result.stderr
+            }, status_code=500)
+            
+    except Exception as e:
+        logger.error(f"Exception stop service: {e}")
+        return JSONResponse({
+            "status": "error",
+            "error": str(e)
+        }, status_code=500)
+
+
+@app.get("/api/admin/status")
+def get_status():
+    """
+    Status détaillé (ancien endpoint, garde pour compatibilité)
+    """
+    
     db_ok = test_db_connection()
     
     return JSONResponse({
@@ -86,39 +298,78 @@ def get_status():
             "url": DATABASE_URL.split('@')[1] if '@' in DATABASE_URL else "***"
         },
         "mount_base_path": str(MOUNT_BASE_PATH),
-        "debug": API_DEBUG,
-        "project_root": str(PROJECT_ROOT)
     })
 
+
 # ==========================================
-# Endpoints Config
+# HELPER FUNCTIONS
 # ==========================================
-@app.get("/config")
-def get_config():
-    """
-    Retourne la configuration actuelle (pour debug)
-    NE PAS exposer les mots de passe en prod !
-    """
-    return JSONResponse({
-        "api_host": API_HOST,
-        "api_port": API_PORT,
-        "api_debug": API_DEBUG,
-        "mount_base_path": str(MOUNT_BASE_PATH),
-        "log_level": LOG_LEVEL,
-        "log_file": str(LOG_FILE)
-    })
+
+def check_postgres_running() -> bool:
+    """Vérifie si PostgreSQL tourne"""
+    try:
+        result = subprocess.run(
+            ["sudo", "systemctl", "is-active", "postgresql"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        return result.returncode == 0
+    except:
+        return False
+
+
+def get_mounts_info() -> dict:
+    """Récupère info sur les montages"""
+    # TODO: implémenter vérification réelle des montages SMB
+    return {
+        "total": 0,
+        "healthy": 0,
+        "failed": 0
+    }
+
+
+def get_hostname() -> str:
+    """Récupère le hostname de la machine"""
+    try:
+        return subprocess.run(
+            ["hostname"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        ).stdout.strip()
+    except:
+        return "unknown"
+
+
+def get_local_ip() -> str:
+    """Récupère l'adresse IP locale"""
+    try:
+        # Essayer de détecter l'IP via ifconfig ou ip
+        result = subprocess.run(
+            ["hostname", "-I"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        ips = result.stdout.strip().split()
+        return ips[0] if ips else "unknown"
+    except:
+        return "unknown"
+
 
 # ==========================================
 # Main
 # ==========================================
+
 if __name__ == "__main__":
     import uvicorn
     
     logger.info("=" * 60)
-    logger.info(f"🚀 Démarrage MediaManager Watcher")
+    logger.info(f"🚀 Démarrage MediaManager Watcher v{APP_VERSION}")
     logger.info(f"   API: http://{API_HOST}:{API_PORT}")
+    logger.info(f"   Admin: http://{API_HOST}:{API_PORT}/admin")
     logger.info(f"   Debug: {API_DEBUG}")
-    logger.info(f"   Logs: {LOG_FILE}")
     logger.info("=" * 60)
     
     try:
