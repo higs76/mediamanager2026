@@ -107,7 +107,7 @@ ip link show $VMBRIDGE &>/dev/null || log_error "Bridge '$VMBRIDGE' not found"
 log_success "Resources available"
 
 # On prépare le texte pour l'IP
-if [ -z "$IP" ] || [ "$IP" = "dhcp" ]; then
+if [ -z "$NET" ] || [ "$NET" = "dhcp" ]; then
     DISPLAY_IP="DHCP"
 else
     DISPLAY_IP="$IP"
@@ -125,7 +125,7 @@ echo "  Memory: ${MEMORY}MB"
 echo "  Storage Template: $TEMPLATE_STORAGE"
 echo "  Storage Container: $STORAGE"
 echo "  Storage Container Disk: ${DISK_SIZE}GB"
-echo "  Bridge: $VMBRIDGE"
+echo "  Bridge: $BRG"
 echo "  IP: $DISPLAY_IP"
 echo "=========================================="
 echo ""
