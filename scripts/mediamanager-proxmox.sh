@@ -47,13 +47,14 @@ if [ "$CTID" = "auto" ]; then
 else
     # Tant que l'ID est déjà utilisé OU n'est pas un nombre
     while [[ ! "$CTID" =~ ^[0-9]+$ ]] || pct list | awk '{print $1}' | grep -qW "$CTID"; do
-    echo "L'ID '$CTID' est invalide ou déjà utilisé."
+        echo "L'ID '$CTID' est invalide ou déjà utilisé."
         read -p "Veuillez saisir un autre ID (ou 'auto') : " CTID
 
         if [ "$CTID" = "auto" ]; then
             CTID=$(pvesh get /cluster/nextid)
             break # On sort de la boucle puisqu'on a un ID valide
         fi
+    done
 fi
 
 
