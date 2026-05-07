@@ -171,14 +171,11 @@ pct create $CTID "$TEMPLATE_STORAGE:vztmpl/$TEMPLATE" \
   --rootfs "${STORAGE}:${DISK_SIZE}" \
   --unprivileged 1 \
   --features nesting=1 \
+  --onboot 1 \
+  --start 1 \
   --ostype ubuntu
 
 log_success "LXC created"
-
-
-
-
-
 
 # Attendre le démarrage
 log_info "Waiting for container..."
