@@ -50,7 +50,7 @@ else
         # 1. Vérifier si c'est un nombre (méthode compatible partout)
         if [ -n "$CTID" ] && [ "$CTID" -eq "$CTID" ] 2>/dev/null; then
             # 2. Vérifier si l'ID est libre
-            if ! pct list | awk '{print $1}' | grep -qW "$CTID"; then
+            if ! pct list | awk '{print $1}' | grep -qw "$CTID"; then
                 break # Tout est OK, on sort de la boucle
             fi
         fi
