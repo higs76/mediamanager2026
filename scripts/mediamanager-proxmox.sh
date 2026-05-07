@@ -16,7 +16,7 @@ STORAGE=${var_container_storage:-"local-lvm"}
 TEMPLATE_STORAGE=${var_template_storage:-"local"}
 MEMORY=${var_ram:-"4096"}
 VCPU=${var_cpu:-"2"}
-DISK_SIZE=${var_disk:-"50G"}
+DISK_SIZE=${var_disk:-"20"}
 BRG=${var_brg:-"vmbr0"}
 NET=${var_net:-"dhcp"}
 
@@ -122,9 +122,9 @@ echo "  Container ID: $CTID"
 echo "  Hostname: $HOSTNAME"
 echo "  CPU Cores: $VCPU"
 echo "  Memory: ${MEMORY}MB"
-echo "  Disk: ${DISK_SIZE}GB"
 echo "  Storage Template: $TEMPLATE_STORAGE"
 echo "  Storage Container: $STORAGE"
+echo "  Storage Container Disk: ${DISK_SIZE}GB"
 echo "  Bridge: $VMBRIDGE"
 echo "  IP: $DISPLAY_IP"
 echo "=========================================="
