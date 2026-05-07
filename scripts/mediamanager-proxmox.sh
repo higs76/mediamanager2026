@@ -179,7 +179,7 @@ pct create $CTID "$TEMPLATE_STORAGE:vztmpl/$TEMPLATE" \
   --cores "$VCPU" \
   --memory "$MEMORY" \
   --net0 name=eth0,bridge="$BRG" \
-  --rootfs "$STORAGE:8" \  
+  --rootfs "$STORAGE:8" \
   --unprivileged 1 \
   --features nesting=1 \
   --ostype ubuntu \
