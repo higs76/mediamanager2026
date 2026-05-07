@@ -71,38 +71,34 @@ log_success "Using Container ID: $CTID"
 
 # Vérifier les ressources
 log_info "Checking resources..."
+
+# --- Fonction de vérification simplifiée ---
+check_storage_capability() {
+    local store=$1
+    local cap=$2
+    # On demande le format 'text' mais sans les bordures de tableau si possible, 
+    # ou on nettoie la sortie avec grep.
+    pvesh get /storage/$store --output-format text 2>/dev/null | grep -w "content" | grep -q "$cap"
+}
+
 # --- Vérification du stockage des CONTENEURS ---
-# --- Vérification du stockage de destination ---
-log_info "Vérification du stockage de destination (Container) ($STORAGE)..."
-# On prend toute la sortie texte, c'est plus sûr
-STORAGE_INFO=$(pvesh get /storage/$STORAGE --output-format text 2>/dev/null)
-
-if [[ -z "$STORAGE_INFO" ]]; then
-    log_error "Le stockage '$STORAGE' est introuvable."
+# --- Vérification du stockage Container ---
+log_info "Vérification du stockage de destination ($STORAGE)..."
+if check_storage_capability "$STORAGE" "rootdir"; then
+    echo "✅ Destination validée."
+else
+    log_error "Le stockage '$STORAGE' est introuvable ou n'accepte pas les containers (rootdir)."
     exit 1
 fi
 
-# On vérifie si 'rootdir' est présent dans la ligne 'content'
-if ! echo "$STORAGE_INFO" | grep -q "rootdir"; then
-    log_error "Le stockage '$STORAGE' n'autorise pas les containers (rootdir)."
-    exit 1
-fi
-
-# --- Vérification du stockage source ---
+# --- Vérification du stockage Source ---
 log_info "Vérification du stockage source (Images/Modèles) ($TEMPLATE_STORAGE)..."
-TEMPLATE_INFO=$(pvesh get /storage/$TEMPLATE_STORAGE --output-format text 2>/dev/null)
-
-if [[ -z "$TEMPLATE_INFO" ]]; then
-    log_error "Le stockage '$TEMPLATE_STORAGE' est introuvable."
+if check_storage_capability "$TEMPLATE_STORAGE" "vztmpl"; then
+    echo "✅ Source validée."
+else
+    log_error "Le stockage '$TEMPLATE_STORAGE' est introuvable ou n'accepte pas les templates (vztmpl)."
     exit 1
 fi
-
-if ! echo "$TEMPLATE_INFO" | grep -q "vztmpl"; then
-    log_error "Le stockage '$TEMPLATE_STORAGE' n'autorise pas les modèles LXC (vztmpl)."
-    exit 1
-fi
-
-log_info "✅ Stockages validés."
 
 
 
