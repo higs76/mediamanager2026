@@ -50,8 +50,8 @@ else
     log_info "Verifying Container ID..."
     while true; do
         if [[ "$CTID" =~ ^[0-9]+$ ]]; then
-            # Vérification globale (VM + CT)
-            if pvesh get /cluster/resources --output-format text | grep -qw "$CTID"; then
+            # Vérification globale (VM + CT)            
+            if pvesh get /cluster/resources --output-format text 2>/dev/null | awk '{print $2}' | grep -qw "$CTID"; then
                 echo "Erreur : L'ID $CTID est déjà utilisé."
             else
                 break # L'ID est libre !
@@ -67,22 +67,41 @@ else
         fi
     done
 fi
-
-
-
-
-# Obtenir le prochain CTID disponible (LXC ou VM)
-
-#CTID=100
-# On ajoute >/dev/null pour cacher aussi le texte de succès du status
-#while pct status $CTID >/dev/null 2>&1 || qm status $CTID >/dev/null 2>&1; do
-#    CTID=$((CTID + 1))
-#done
 log_success "Using Container ID: $CTID"
 
 # Vérifier les ressources
 log_info "Checking resources..."
-pvesh get /storage/$STORAGE &>/dev/null || log_error "Storage '$STORAGE' not found"
+# --- Vérification du stockage des CONTENEURS ---
+log_info "Vérification du stockage de destination (Container) ($STORAGE)..."
+# On récupère les types de contenus autorisés pour ce stockage
+STORAGE_CONTENT=$(pvesh get /storage/$STORAGE --property content --output-format text 2>/dev/null)
+if [ -z "$STORAGE_CONTENT" ]; then
+    log_error "Le stockage '$STORAGE' n'existe pas ou n'est pas accessible."
+    exit 1
+elif [[ ! "$STORAGE_CONTENT" =~ "rootdir" ]]; then
+    # 'rootdir' est le mot-clé Proxmox pour "peut héberger un disque de container"
+    log_error "Le stockage '$STORAGE' existe, mais il n'autorise pas les disques de containers (rootdir)."
+    exit 1
+fi
+# --- Vérification du stockage des TEMPLATES ---
+log_info "Vérification du stockage source, templates (Images ISO / Modèles Ubuntu) ($TEMPLATE_STORAGE)..."
+TEMPLATE_CONTENT=$(pvesh get /storage/$TEMPLATE_STORAGE --property content --output-format text 2>/dev/null)
+
+if [ -z "$TEMPLATE_CONTENT" ]; then
+    log_error "Le stockage des templates '$TEMPLATE_STORAGE' est introuvable."
+    exit 1
+elif [[ ! "$TEMPLATE_CONTENT" =~ "vztmpl" ]]; then
+    # 'vztmpl' est le mot-clé pour "peut héberger des templates .tar.zst"
+    log_error "Le stockage '$TEMPLATE_STORAGE' n'autorise pas le stockage de templates (vztmpl)."
+    exit 1
+fi
+
+log_info "Stockages validés : $STORAGE (Installation) et $TEMPLATE_STORAGE (Source)."
+
+
+
+
+#pvesh get /storage/$STORAGE &>/dev/null || log_error "Storage '$STORAGE' not found"
 ip link show $VMBRIDGE &>/dev/null || log_error "Bridge '$VMBRIDGE' not found"
 log_success "Resources available"
 
@@ -96,7 +115,8 @@ echo "  Hostname: $HOSTNAME"
 echo "  CPU Cores: $CORES"
 echo "  Memory: ${MEMORY}MB"
 echo "  Disk: ${DISK}GB"
-echo "  Storage: $STORAGE"
+echo "  Storage Template: $TEMPLATE_STORAGE"
+echo "  Storage Container: $STORAGE"
 echo "  Bridge: $VMBRIDGE"
 echo "  IP: DHCP"
 echo "=========================================="
