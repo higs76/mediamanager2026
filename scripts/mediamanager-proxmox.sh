@@ -72,31 +72,37 @@ log_success "Using Container ID: $CTID"
 # Vérifier les ressources
 log_info "Checking resources..."
 # --- Vérification du stockage des CONTENEURS ---
+# --- Vérification du stockage de destination ---
 log_info "Vérification du stockage de destination (Container) ($STORAGE)..."
-# On récupère les types de contenus autorisés pour ce stockage
-STORAGE_CONTENT=$(pvesh get /storage/$STORAGE --property content --output-format text 2>/dev/null)
-if [ -z "$STORAGE_CONTENT" ]; then
-    log_error "Le stockage '$STORAGE' n'existe pas ou n'est pas accessible."
-    exit 1
-elif [[ ! "$STORAGE_CONTENT" =~ "rootdir" ]]; then
-    # 'rootdir' est le mot-clé Proxmox pour "peut héberger un disque de container"
-    log_error "Le stockage '$STORAGE' existe, mais il n'autorise pas les disques de containers (rootdir)."
-    exit 1
-fi
-# --- Vérification du stockage des TEMPLATES ---
-log_info "Vérification du stockage source, templates (Images ISO / Modèles Ubuntu) ($TEMPLATE_STORAGE)..."
-TEMPLATE_CONTENT=$(pvesh get /storage/$TEMPLATE_STORAGE --property content --output-format text 2>/dev/null)
+# On prend toute la sortie texte, c'est plus sûr
+STORAGE_INFO=$(pvesh get /storage/$STORAGE --output-format text 2>/dev/null)
 
-if [ -z "$TEMPLATE_CONTENT" ]; then
-    log_error "Le stockage des templates '$TEMPLATE_STORAGE' est introuvable."
-    exit 1
-elif [[ ! "$TEMPLATE_CONTENT" =~ "vztmpl" ]]; then
-    # 'vztmpl' est le mot-clé pour "peut héberger des templates .tar.zst"
-    log_error "Le stockage '$TEMPLATE_STORAGE' n'autorise pas le stockage de templates (vztmpl)."
+if [[ -z "$STORAGE_INFO" ]]; then
+    log_error "Le stockage '$STORAGE' est introuvable."
     exit 1
 fi
 
-log_info "Stockages validés : $STORAGE (Installation) et $TEMPLATE_STORAGE (Source)."
+# On vérifie si 'rootdir' est présent dans la ligne 'content'
+if ! echo "$STORAGE_INFO" | grep -q "rootdir"; then
+    log_error "Le stockage '$STORAGE' n'autorise pas les containers (rootdir)."
+    exit 1
+fi
+
+# --- Vérification du stockage source ---
+log_info "Vérification du stockage source (Images/Modèles) ($TEMPLATE_STORAGE)..."
+TEMPLATE_INFO=$(pvesh get /storage/$TEMPLATE_STORAGE --output-format text 2>/dev/null)
+
+if [[ -z "$TEMPLATE_INFO" ]]; then
+    log_error "Le stockage '$TEMPLATE_STORAGE' est introuvable."
+    exit 1
+fi
+
+if ! echo "$TEMPLATE_INFO" | grep -q "vztmpl"; then
+    log_error "Le stockage '$TEMPLATE_STORAGE' n'autorise pas les modèles LXC (vztmpl)."
+    exit 1
+fi
+
+log_info "✅ Stockages validés."
 
 
 
