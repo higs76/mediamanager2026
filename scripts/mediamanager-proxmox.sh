@@ -51,7 +51,7 @@ else
     while true; do
         if [[ "$CTID" =~ ^[0-9]+$ ]]; then
             # Vérification globale (VM + CT)
-            if pvesh get /cluster/resources --output-format idlist | grep -qw "$CTID"; then
+            if pvesh get /cluster/resources --output-format text | grep -qw "$CTID"; then
                 echo "Erreur : L'ID $CTID est déjà utilisé."
             else
                 break # L'ID est libre !
