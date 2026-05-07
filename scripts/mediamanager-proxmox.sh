@@ -137,10 +137,6 @@ echo "  IP: $DISPLAY_IP"
 echo "=========================================="
 echo ""
 
-echo "========================================================="
-echo "FIN DU TEST DE VALIDATION"
-exit 0  # Arrête le script ici avec succès
-
 read -p "Continue? (y/n): " -n1
 echo ""
 if [[ ! $REPLY =~ ^[Yy]$ ]]; then
