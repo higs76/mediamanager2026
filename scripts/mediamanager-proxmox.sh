@@ -179,13 +179,22 @@ log_success "LXC created"
 
 # Attendre le démarrage
 log_info "Waiting for container..."
+READY=0
+
 for i in {1..30}; do
-    if pct exec $CTID -- test -f /etc/os-release 2>/dev/null; then
-        log_success "Container ready"
+    if pct exec "$CTID" -- test -S /run/dbus/system_bus_socket >/dev/null 2>&1; then
+        READY=1
         break
     fi
-    sleep 1
+
+    sleep 2
 done
+
+if [ "$READY" -ne 1 ]; then
+    log_error "Container failed to start correctly"
+    pct status "$CTID"
+    exit 1
+fi
 
 # Installer MediaManager
 log_info "Installing MediaManager..."
@@ -250,6 +259,19 @@ EOF
 
 log_success "Installation complete!"
 
+CT_IP=""
+
+for i in {1..30}; do
+    CT_IP=$(pct exec "$CTID" -- hostname -I 2>/dev/null | awk '{print $1}')
+
+    if [ -n "$CT_IP" ]; then
+        break
+    fi
+
+    sleep 2
+done
+
+
 echo ""
 echo "=========================================="
 echo -e "${GREEN}  Done!${NC}"
@@ -258,5 +280,9 @@ echo ""
 echo "Container: $CTID ($HOSTNAME)"
 echo ""
 echo "Get the IP: pct exec $CTID -- hostname -I"
-echo "Then visit: http://<ip>:8000/admin/"
+if [ -n "$CT_IP" ]; then
+    echo "Access: http://$CT_IP:8000/admin/"
+else
+    echo "Access: http://<container-ip>:8000/admin/ (IP not detected, check with 'pct exec $CTID -- hostname -I')"
+fi
 echo ""
