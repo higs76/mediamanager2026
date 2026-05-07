@@ -41,24 +41,26 @@ log_success "Running on Proxmox VE"
 
 
 #check container ID
-log_info "Finding next available Container ID..."
+
 if [ "$CTID" = "auto" ]; then
+    log_info "Finding next available Container ID..."
     CTID=$(pvesh get /cluster/nextid)    
 else
     # On entre dans la boucle si l'utilisateur a saisi un ID manuellement
+    log_info "Verifying Container ID..."
     while true; do
-        # 1. Vérifier si c'est un nombre (méthode compatible partout)
-        if [ -n "$CTID" ] && [ "$CTID" -eq "$CTID" ] 2>/dev/null; then
-            # 2. Vérifier si l'ID est libre
-            if ! pct list | awk '{print $1}' | grep -qw "$CTID"; then
-                break # Tout est OK, on sort de la boucle
+        if [[ "$CTID" =~ ^[0-9]+$ ]]; then
+            # Vérification globale (VM + CT)
+            if pvesh get /cluster/resources --output-format idlist | grep -qw "$CTID"; then
+                echo "Erreur : L'ID $CTID est déjà utilisé."
+            else
+                break # L'ID est libre !
             fi
+        else
+            echo "Erreur : '$CTID' n'est pas un nombre valide."
         fi
-
-        # Si on arrive ici, c'est que l'ID est soit invalide, soit déjà pris
-        echo "L'ID '$CTID' est invalide ou déjà utilisé."
-        read -p "Veuillez saisir un autre ID (ou 'auto') : " CTID
         
+        read -p "Veuillez saisir un autre ID (ou 'auto') : " CTID        
         if [ "$CTID" = "auto" ]; then
             CTID=$(pvesh get /cluster/nextid)
             break
