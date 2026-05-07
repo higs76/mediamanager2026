@@ -35,7 +35,8 @@ log_success "Running on Proxmox VE"
 # Obtenir le prochain CTID disponible (LXC ou VM)
 log_info "Finding next available Container ID..."
 CTID=100
-while pct status $CTID 2>/dev/null || qm status $CTID 2>/dev/null; do
+# On ajoute >/dev/null pour cacher aussi le texte de succès du status
+while pct status $CTID >/dev/null 2>&1 || qm status $CTID >/dev/null 2>&1; do
     CTID=$((CTID + 1))
 done
 log_success "Using Container ID: $CTID"
@@ -72,8 +73,10 @@ fi
 log_info "Creating LXC container $CTID..."
 #pct create $CTID ubuntu-24.04-standard_24.04-1_amd64.tar.zst \
 pveam update
-pveam download local ubuntu-24.04-standard_24.04-1_amd64.tar.zst
-pct create $CTID local:vztmpl/ubuntu-24.04-standard_24.04-1_amd64.tar.zst
+pveam download local ubuntu-24.04-standard
+TEMPLATE=$(pveam list local | grep "ubuntu-24.04-standard" | awk '{print $2}' | head -n 1)
+
+pct create $CTID local:vztmpl/$TEMPLATE
     --arch amd64 --cores $CORES --memory $MEMORY --swap 0 \
     --storage $STORAGE --rootfs $STORAGE:$DISK \
     --hostname $HOSTNAME --net0 name=eth0,bridge=$VMBRIDGE,type=veth \
