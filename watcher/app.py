@@ -8,6 +8,7 @@ Inclut :
 """
 
 import logging
+import socket
 import sys
 import os
 import subprocess
@@ -332,12 +333,7 @@ def get_mounts_info() -> dict:
 def get_hostname() -> str:
     """Récupère le hostname de la machine"""
     try:
-        return subprocess.run(
-            ["hostname"],
-            capture_output=True,
-            text=True,
-            timeout=5
-        ).stdout.strip()
+        return socket.gethostname()
     except:
         return "unknown"
 
@@ -345,18 +341,14 @@ def get_hostname() -> str:
 def get_local_ip() -> str:
     """Récupère l'adresse IP locale"""
     try:
-        # Essayer de détecter l'IP via ifconfig ou ip
-        result = subprocess.run(
-            ["hostname", "-I"],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        ips = result.stdout.strip().split()
-        return ips[0] if ips else "unknown"
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("1.1.1.1", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
     except:
         return "unknown"
-
+    
 
 # ==========================================
 # Main
