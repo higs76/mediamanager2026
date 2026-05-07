@@ -20,6 +20,8 @@ DISK_SIZE=${var_disk:-"20"}
 BRG=${var_brg:-"vmbr0"}
 NET=${var_net:-"dhcp"}
 
+echo "TEST: $BRG"
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -99,9 +101,6 @@ else
     log_error "Le stockage '$TEMPLATE_STORAGE' est introuvable ou n'accepte pas les templates (vztmpl)."
     exit 1
 fi
-
-# On nettoie le hostname au cas où (remplace les espaces par des tirets)
-
 
 ip link show $BRG &>/dev/null || log_error "Bridge '$BRG' not found"
 log_success "Resources available"
