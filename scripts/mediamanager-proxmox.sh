@@ -20,8 +20,6 @@ DISK_SIZE=${var_disk:-"20"}
 BRG=${var_brg:-"vmbr0"}
 NET=${var_net:-"dhcp"}
 
-echo "TEST: $BRG"
-
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
