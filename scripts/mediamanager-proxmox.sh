@@ -70,23 +70,22 @@ if [[ ! $REPLY =~ ^[Yy]$ ]]; then
 fi
 
 # Créer le LXC
-log_info "Creating LXC container $CTID..."
-
+# 1. Récupérer dynamiquement le nom du dernier template Ubuntu 24.04 disponible
 log_info "Updating Proxmox templates..."
 pveam update >/dev/null
-TEMPLATE=$(pveam available -section system | grep "ubuntu-24.04" | head -n1 | awk '{print $2}')
+TEMPLATE=$(pveam available -section system | grep "ubuntu-24.04-standard" | head -n1 | awk '{print $2}')
 
-# 2. On le télécharge (Proxmox ne fera rien s'il l'a déjà)
+# 2. Télécharger ce template spécifique
 log_info "Downloading template: $TEMPLATE"
 pveam download local $TEMPLATE
 
-pveam download local ubuntu-24.04-standard
-TEMPLATE=$(pveam list local | grep "ubuntu-24.04-standard" | awk '{print $2}' | head -n 1)
+log_info "Creating LXC container $CTID..."
 
 pct create $CTID local:vztmpl/$TEMPLATE
     --arch amd64 --cores $CORES --memory $MEMORY --swap 0 \
     --storage $STORAGE --rootfs $STORAGE:$DISK \
     --hostname $HOSTNAME --net0 name=eth0,bridge=$VMBRIDGE,type=veth \
+    --ostype ubuntu --description "MediaManager 2026" \
     --unprivileged 1 --onboot 1 --start 1
 log_success "LXC created"
 
