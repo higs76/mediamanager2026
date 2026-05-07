@@ -14,8 +14,8 @@ CTID=${var_ctid:-"auto"}
 HOSTNAME=${var_hostname:-"mediamanager"}
 STORAGE=${var_container_storage:-"local-lvm"}
 TEMPLATE_STORAGE=${var_template_storage:-"local"}
-RAM_SIZE=${var_ram:-"4096"}
-CORE_COUNT=${var_cpu:-"2"}
+MEMORY=${var_ram:-"4096"}
+VCPU=${var_cpu:-"2"}
 DISK_SIZE=${var_disk:-"50G"}
 BRG=${var_brg:-"vmbr0"}
 NET=${var_net:-"dhcp"}
@@ -85,7 +85,7 @@ check_storage_capability() {
 # --- Vérification du stockage Container ---
 log_info "Vérification du stockage de destination ($STORAGE)..."
 if check_storage_capability "$STORAGE" "rootdir"; then
-    echo "✅ Destination validée."
+    log_success "Destination validée."
 else
     log_error "Le stockage '$STORAGE' est introuvable ou n'accepte pas les containers (rootdir)."
     exit 1
@@ -94,18 +94,24 @@ fi
 # --- Vérification du stockage Source ---
 log_info "Vérification du stockage source (Images/Modèles) ($TEMPLATE_STORAGE)..."
 if check_storage_capability "$TEMPLATE_STORAGE" "vztmpl"; then
-    echo "✅ Source validée."
+    log_success "Source validée."
 else
     log_error "Le stockage '$TEMPLATE_STORAGE' est introuvable ou n'accepte pas les templates (vztmpl)."
     exit 1
 fi
 
+# On nettoie le hostname au cas où (remplace les espaces par des tirets)
+HOSTNAME=$(echo "${var_hostname:-mediamanager}" | tr ' ' '-')
 
-
-
-#pvesh get /storage/$STORAGE &>/dev/null || log_error "Storage '$STORAGE' not found"
 ip link show $VMBRIDGE &>/dev/null || log_error "Bridge '$VMBRIDGE' not found"
 log_success "Resources available"
+
+# On prépare le texte pour l'IP
+if [ -z "$IP" ] || [ "$IP" = "dhcp" ]; then
+    DISPLAY_IP="DHCP"
+else
+    DISPLAY_IP="$IP"
+fi
 
 # Résumé
 echo ""
@@ -114,13 +120,13 @@ echo "  Configuration"
 echo "=========================================="
 echo "  Container ID: $CTID"
 echo "  Hostname: $HOSTNAME"
-echo "  CPU Cores: $CORES"
+echo "  CPU Cores: $VCPU"
 echo "  Memory: ${MEMORY}MB"
-echo "  Disk: ${DISK}GB"
+echo "  Disk: ${DISK_SIZE}GB"
 echo "  Storage Template: $TEMPLATE_STORAGE"
 echo "  Storage Container: $STORAGE"
 echo "  Bridge: $VMBRIDGE"
-echo "  IP: DHCP"
+echo "  IP: $DISPLAY_IP"
 echo "=========================================="
 echo ""
 
