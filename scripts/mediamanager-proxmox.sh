@@ -168,10 +168,10 @@ pct create $CTID "$TEMPLATE_STORAGE:vztmpl/$TEMPLATE" \
   --cores "$VCPU" \
   --memory "$MEMORY" \
   --net0 "name=eth0,bridge=${BRG},ip=${NET}" \
-  --rootfs "${STORAGE}:${DISK_SIZE}G" \
+  --rootfs "${STORAGE}:${DISK_SIZE}" \
   --unprivileged 1 \
   --features nesting=1 \
-  --ostype ubuntu \
+  --ostype ubuntu
 
 log_success "LXC created"
 
