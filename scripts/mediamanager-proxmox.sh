@@ -107,12 +107,6 @@ else
     DISPLAY_IP="$IP"
 fi
 
-# On prépare le texte pour l'IP
-if [ -z "$NET" ] || [ "$NET" = "dhcp" ]; then
-    DISPLAY_IP="DHCP"
-else
-    DISPLAY_IP="$IP"
-fi
 
 # Résumé
 echo ""
@@ -124,11 +118,6 @@ echo "  Hostname: $HOSTNAME"
 echo "  CPU Cores: $VCPU"
 echo "  CPU Cores: $VCPU"
 echo "  Memory: ${MEMORY}MB"
-echo "  Storage Template: $TEMPLATE_STORAGE"
-echo "  Storage Container: $STORAGE"
-echo "  Storage Container Disk: ${DISK_SIZE}GB"
-echo "  Bridge: $BRG"
-echo "  IP: $DISPLAY_IP"
 echo "  Storage Template: $TEMPLATE_STORAGE"
 echo "  Storage Container: $STORAGE"
 echo "  Storage Container Disk: ${DISK_SIZE}GB"
@@ -178,13 +167,11 @@ pct create $CTID "$TEMPLATE_STORAGE:vztmpl/$TEMPLATE" \
   --hostname "$HOSTNAME" \
   --cores "$VCPU" \
   --memory "$MEMORY" \
-  --net0 name=eth0,bridge="$BRG" \
-  --rootfs "$STORAGE:8" \
+  --net0 "name=eth0,bridge=${BRG},ip=${NET}" \
+  --rootfs "${STORAGE}:{DISK_SIZE}G" \
   --unprivileged 1 \
   --features nesting=1 \
   --ostype ubuntu \
-  --start 1
-
 
 log_success "LXC created"
 
