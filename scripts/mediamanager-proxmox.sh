@@ -167,13 +167,31 @@ pveam download local $TEMPLATE
 
 log_info "Creating LXC container $CTID..."
 
-pct create $CTID local:vztmpl/$TEMPLATE
-    --arch amd64 --cores $VCPU --memory $MEMORY --swap 0 \
-    --storage $STORAGE --rootfs $STORAGE:$DISK \
-    --hostname $HOSTNAME --net0 name=eth0,bridge=$BRG,type=veth \
-    --ostype ubuntu --description "MediaManager 2026" \
-    --unprivileged 1 --onboot 1 --start 1
+#pct create $CTID local:vztmpl/$TEMPLATE
+ #   --arch amd64 --cores $VCPU --memory $MEMORY --swap 0 \
+ #  --storage $STORAGE --rootfs $STORAGE:$DISK \
+ #   --hostname $HOSTNAME --net0 name=eth0,bridge=$BRG,type=veth \
+ #   --ostype ubuntu --description "MediaManager 2026" \
+ #   --unprivileged 1 --onboot 1 --start 1
+
+pct create $CTID "$TEMPLATE_STORAGE:vztmpl/$TEMPLATE" \
+  --hostname "$HOSTNAME" \
+  --cores "$VCPU" \
+  --memory "$MEMORY" \
+  --net0 name=eth0,bridge="$BRG" \
+  --rootfs "$STORAGE:8" \  
+  --unprivileged 1 \
+  --features nesting=1 \
+  --ostype ubuntu \
+  --start 1
+
+
 log_success "LXC created"
+
+
+
+
+
 
 # Attendre le démarrage
 log_info "Waiting for container..."
