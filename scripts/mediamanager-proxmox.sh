@@ -6,13 +6,19 @@
 
 set -e
 
-CTID="auto"
-HOSTNAME="mediamanager"
-CORES="2"
-MEMORY="4096"
-DISK="50"
-STORAGE="local-lvm"
-VMBRIDGE="vmbr0"
+# --- 1. RÉCUPÉRATION DES VARIABLES (Paramètres ou Défaut) ---
+# La syntaxe ${var:-defaut} permet d'utiliser la variable fournie 
+# par l'utilisateur, ou une valeur de secours si c'est vide.
+APP="Media manager"
+CTID=${var_ctid:-"auto"}
+HOSTNAME=${var_hostname:-"mediamanager"}
+STORAGE=${var_container_storage:-"local-lvm"}
+TEMPLATE_STORAGE=${var_template_storage:-"local"}
+RAM_SIZE=${var_ram:-"4096"}
+CORE_COUNT=${var_cpu:-"2"}
+DISK_SIZE=${var_disk:-"50G"}
+BRG=${var_brg:-"vmbr0"}
+NET=${var_net:-"dhcp"}
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -32,13 +38,19 @@ fi
 log_info "Checking Proxmox environment..."
 log_success "Running on Proxmox VE"
 
-# Obtenir le prochain CTID disponible (LXC ou VM)
+
+
+#check container ID
 log_info "Finding next available Container ID..."
-CTID=100
+CTID=$(pvesh get /cluster/nextid)
+
+# Obtenir le prochain CTID disponible (LXC ou VM)
+
+#CTID=100
 # On ajoute >/dev/null pour cacher aussi le texte de succès du status
-while pct status $CTID >/dev/null 2>&1 || qm status $CTID >/dev/null 2>&1; do
-    CTID=$((CTID + 1))
-done
+#while pct status $CTID >/dev/null 2>&1 || qm status $CTID >/dev/null 2>&1; do
+#    CTID=$((CTID + 1))
+#done
 log_success "Using Container ID: $CTID"
 
 # Vérifier les ressources
@@ -62,6 +74,10 @@ echo "  Bridge: $VMBRIDGE"
 echo "  IP: DHCP"
 echo "=========================================="
 echo ""
+
+echo "========================================================="
+echo "FIN DU TEST DE VALIDATION"
+exit 0  # Arrête le script ici avec succès
 
 read -p "Continue? (y/n): " -n1
 echo ""
