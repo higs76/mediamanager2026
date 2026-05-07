@@ -11,7 +11,7 @@ set -e
 # par l'utilisateur, ou une valeur de secours si c'est vide.
 APP="Media manager"
 CTID=${var_ctid:-"auto"}
-HOSTNAME=${var_hostname:-"mediamanager"}
+HOSTNAME=$(echo "${var_hostname:-mediamanager}" | tr ' ' '-')
 STORAGE=${var_container_storage:-"local-lvm"}
 TEMPLATE_STORAGE=${var_template_storage:-"local"}
 MEMORY=${var_ram:-"4096"}
@@ -101,9 +101,9 @@ else
 fi
 
 # On nettoie le hostname au cas où (remplace les espaces par des tirets)
-HOSTNAME=$(echo "${var_hostname:-mediamanager}" | tr ' ' '-')
 
-ip link show $VMBRIDGE &>/dev/null || log_error "Bridge '$VMBRIDGE' not found"
+
+ip link show $BRG &>/dev/null || log_error "Bridge '$BRG' not found"
 log_success "Resources available"
 
 # On prépare le texte pour l'IP
