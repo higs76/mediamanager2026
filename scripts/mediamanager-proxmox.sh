@@ -107,6 +107,13 @@ else
     DISPLAY_IP="$IP"
 fi
 
+# On prépare le texte pour l'IP
+if [ -z "$NET" ] || [ "$NET" = "dhcp" ]; then
+    DISPLAY_IP="DHCP"
+else
+    DISPLAY_IP="$IP"
+fi
+
 # Résumé
 echo ""
 echo "=========================================="
@@ -115,7 +122,13 @@ echo "=========================================="
 echo "  Container ID: $CTID"
 echo "  Hostname: $HOSTNAME"
 echo "  CPU Cores: $VCPU"
+echo "  CPU Cores: $VCPU"
 echo "  Memory: ${MEMORY}MB"
+echo "  Storage Template: $TEMPLATE_STORAGE"
+echo "  Storage Container: $STORAGE"
+echo "  Storage Container Disk: ${DISK_SIZE}GB"
+echo "  Bridge: $BRG"
+echo "  IP: $DISPLAY_IP"
 echo "  Storage Template: $TEMPLATE_STORAGE"
 echo "  Storage Container: $STORAGE"
 echo "  Storage Container Disk: ${DISK_SIZE}GB"
@@ -123,6 +136,10 @@ echo "  Bridge: $BRG"
 echo "  IP: $DISPLAY_IP"
 echo "=========================================="
 echo ""
+
+echo "========================================================="
+echo "FIN DU TEST DE VALIDATION"
+exit 0  # Arrête le script ici avec succès
 
 read -p "Continue? (y/n): " -n1
 echo ""
@@ -143,6 +160,15 @@ fi
 
 
 # Créer le LXC
+# 1. Récupérer dynamiquement le nom du dernier template Ubuntu 24.04 disponible
+log_info "Updating Proxmox templates..."
+pveam update >/dev/null
+TEMPLATE=$(pveam available -section system | grep "ubuntu-24.04-standard" | head -n1 | awk '{print $2}')
+
+# 2. Télécharger ce template spécifique
+log_info "Downloading template: $TEMPLATE"
+pveam download local $TEMPLATE
+
 log_info "Creating LXC container $CTID..."
 
 pct create $CTID local:vztmpl/$TEMPLATE
