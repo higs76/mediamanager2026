@@ -6,13 +6,20 @@
 
 set -e
 
-CTID="auto"
-HOSTNAME="mediamanager"
-CORES="2"
-MEMORY="4096"
-DISK="50"
-STORAGE="local-lvm"
-VMBRIDGE="vmbr0"
+# --- 1. RÉCUPÉRATION DES VARIABLES (Paramètres ou Défaut) ---
+# La syntaxe ${var:-defaut} permet d'utiliser la variable fournie 
+# par l'utilisateur, ou une valeur de secours si c'est vide.
+APP="Media manager"
+CTID=${var_ctid:-"auto"}
+HOSTNAME=$(echo "${var_hostname:-mediamanager}" | tr ' ' '-')
+STORAGE=${var_container_storage:-"local-lvm"}
+TEMPLATE_STORAGE=${var_template_storage:-"local"}
+MEMORY=${var_ram:-"4096"}
+VCPU=${var_cpu:-"2"}
+DISK_SIZE=${var_disk:-"20"}
+BRG=${var_brg:-"vmbr0"}
+NET=${var_net:-"dhcp"}
+
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -32,19 +39,73 @@ fi
 log_info "Checking Proxmox environment..."
 log_success "Running on Proxmox VE"
 
-# Obtenir le prochain CTID disponible (LXC ou VM)
-log_info "Finding next available Container ID..."
-CTID=100
-while pct status $CTID 2>/dev/null || qm status $CTID 2>/dev/null; do
-    CTID=$((CTID + 1))
-done
+#check container ID
+if [ "$CTID" = "auto" ]; then
+    log_info "Finding next available Container ID..."
+    CTID=$(pvesh get /cluster/nextid)    
+else
+    # On entre dans la boucle si l'utilisateur a saisi un ID manuellement
+    log_info "Verifying Container ID..."
+    while true; do
+        if [[ "$CTID" =~ ^[0-9]+$ ]]; then
+            # Vérification globale (VM + CT)            
+            if pvesh get /cluster/resources --output-format text 2>/dev/null | awk '{print $2}' | grep -qw "$CTID"; then
+                echo "Erreur : L'ID $CTID est déjà utilisé."
+            else
+                break # L'ID est libre !
+            fi
+        else
+            echo "Erreur : '$CTID' n'est pas un nombre valide."
+        fi
+        
+        read -p "Veuillez saisir un autre ID (ou 'auto') : " CTID        
+        if [ "$CTID" = "auto" ]; then
+            CTID=$(pvesh get /cluster/nextid)
+            break
+        fi
+    done
+fi
 log_success "Using Container ID: $CTID"
 
 # Vérifier les ressources
 log_info "Checking resources..."
-pvesh get /storage/$STORAGE &>/dev/null || log_error "Storage '$STORAGE' not found"
-ip link show $VMBRIDGE &>/dev/null || log_error "Bridge '$VMBRIDGE' not found"
+
+# --- Fonction de vérification simplifiée ---
+check_storage_capability() {
+    local store=$1
+    local cap=$2
+    # On demande le format 'text' mais sans les bordures de tableau si possible, 
+    # ou on nettoie la sortie avec grep.
+    pvesh get /storage/$store --output-format text 2>/dev/null | grep -w "content" | grep -q "$cap"
+}
+
+# --- Vérification du stockage Container ---
+log_info "Vérification du stockage de destination ($STORAGE)..."
+if check_storage_capability "$STORAGE" "rootdir"; then
+    log_success "Destination validée."
+else
+    log_error "Le stockage '$STORAGE' est introuvable ou n'accepte pas les containers (rootdir)."
+    exit 1
+fi
+
+# --- Vérification du stockage Source ---
+log_info "Vérification du stockage source (Images/Modèles) ($TEMPLATE_STORAGE)..."
+if check_storage_capability "$TEMPLATE_STORAGE" "vztmpl"; then
+    log_success "Source validée."
+else
+    log_error "Le stockage '$TEMPLATE_STORAGE' est introuvable ou n'accepte pas les templates (vztmpl)."
+    exit 1
+fi
+
+ip link show $BRG &>/dev/null || log_error "Bridge '$BRG' not found"
 log_success "Resources available"
+
+# On prépare le texte pour l'IP
+if [ -z "$NET" ] || [ "$NET" = "dhcp" ]; then
+    DISPLAY_IP="DHCP"
+else
+    DISPLAY_IP="$IP"
+fi
 
 # Résumé
 echo ""
@@ -53,12 +114,13 @@ echo "  Configuration"
 echo "=========================================="
 echo "  Container ID: $CTID"
 echo "  Hostname: $HOSTNAME"
-echo "  CPU Cores: $CORES"
+echo "  CPU Cores: $VCPU"
 echo "  Memory: ${MEMORY}MB"
-echo "  Disk: ${DISK}GB"
-echo "  Storage: $STORAGE"
-echo "  Bridge: $VMBRIDGE"
-echo "  IP: DHCP"
+echo "  Storage Template: $TEMPLATE_STORAGE"
+echo "  Storage Container: $STORAGE"
+echo "  Storage Container Disk: ${DISK_SIZE}GB"
+echo "  Bridge: $BRG"
+echo "  IP: $DISPLAY_IP"
 echo "=========================================="
 echo ""
 
@@ -68,15 +130,26 @@ if [[ ! $REPLY =~ ^[Yy]$ ]]; then
     log_error "Cancelled"
 fi
 
+# 1. Récupérer dynamiquement le nom du dernier template Ubuntu 24.04 disponible
+log_info "Updating Proxmox templates..."
+pveam update >/dev/null
+TEMPLATE=$(pveam available -section system | grep "ubuntu-24.04-standard" | head -n1 | awk '{print $2}')
+if [ -z "$TEMPLATE" ]; then    
+    log_info "template not found, downloading template: $TEMPLATE"
+    pveam download local $TEMPLATE
+else
+    log_success "Found template: $TEMPLATE"
+fi
+
+
 # Créer le LXC
 log_info "Creating LXC container $CTID..."
-#pct create $CTID ubuntu-24.04-standard_24.04-1_amd64.tar.zst \
-pveam update
-pveam download local ubuntu-24.04-standard_24.04-1_amd64.tar.zst
-pct create $CTID local:vztmpl/ubuntu-24.04-standard_24.04-1_amd64.tar.zst
-    --arch amd64 --cores $CORES --memory $MEMORY --swap 0 \
+
+pct create $CTID local:vztmpl/$TEMPLATE
+    --arch amd64 --cores $VCPU --memory $MEMORY --swap 0 \
     --storage $STORAGE --rootfs $STORAGE:$DISK \
-    --hostname $HOSTNAME --net0 name=eth0,bridge=$VMBRIDGE,type=veth \
+    --hostname $HOSTNAME --net0 name=eth0,bridge=$BRG,type=veth \
+    --ostype ubuntu --description "MediaManager 2026" \
     --unprivileged 1 --onboot 1 --start 1
 log_success "LXC created"
 
