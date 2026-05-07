@@ -70,7 +70,10 @@ fi
 
 # Créer le LXC
 log_info "Creating LXC container $CTID..."
-pct create $CTID ubuntu-24.04-standard_24.04-1_amd64.tar.zst \
+#pct create $CTID ubuntu-24.04-standard_24.04-1_amd64.tar.zst \
+pveam update
+pveam download local ubuntu-24.04-standard_24.04-1_amd64.tar.zst
+pct create $CTID local:vztmpl/ubuntu-24.04-standard_24.04-1_amd64.tar.zst
     --arch amd64 --cores $CORES --memory $MEMORY --swap 0 \
     --storage $STORAGE --rootfs $STORAGE:$DISK \
     --hostname $HOSTNAME --net0 name=eth0,bridge=$VMBRIDGE,type=veth \
