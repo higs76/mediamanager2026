@@ -71,8 +71,15 @@ fi
 
 # Créer le LXC
 log_info "Creating LXC container $CTID..."
-#pct create $CTID ubuntu-24.04-standard_24.04-1_amd64.tar.zst \
-pveam update
+
+log_info "Updating Proxmox templates..."
+pveam update >/dev/null
+TEMPLATE=$(pveam available -section system | grep "ubuntu-24.04" | head -n1 | awk '{print $2}')
+
+# 2. On le télécharge (Proxmox ne fera rien s'il l'a déjà)
+log_info "Downloading template: $TEMPLATE"
+pveam download local $TEMPLATE
+
 pveam download local ubuntu-24.04-standard
 TEMPLATE=$(pveam list local | grep "ubuntu-24.04-standard" | awk '{print $2}' | head -n 1)
 
