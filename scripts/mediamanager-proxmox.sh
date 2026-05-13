@@ -187,6 +187,11 @@ if [ "$READY" -ne 1 ]; then
     exit 1
 fi
 
+log_info "Prepare contaiiner (install curl...)"
+pct exec $CTID -- apt-get update
+pct exec $CTID -- apt-get install -y curl
+
+
 # Installer MediaManager en appelant proxmox-install.sh depuis le repo
 # Pas de duplication : toute la logique d'installation est dans ce seul fichier.
 # Si proxmox-install.sh est corrigé, le fix s'applique automatiquement ici.
