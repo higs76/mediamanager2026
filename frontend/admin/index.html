@@ -1,573 +1,257 @@
 <!DOCTYPE html>
-<html lang="fr">
+<html lang="fr" data-theme="auto">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MediaManager Admin Panel</title>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 20px;
-            color: #333;
-        }
-
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-        }
-
-        .header {
-            background: white;
-            padding: 30px;
-            border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-            margin-bottom: 30px;
-        }
-
-        .header h1 {
-            margin-bottom: 10px;
-            color: #667eea;
-        }
-
-        .header-info {
-            display: flex;
-            gap: 30px;
-            font-size: 14px;
-            color: #666;
-        }
-
-        .tabs {
-            display: flex;
-            gap: 10px;
-            margin-bottom: 20px;
-            background: white;
-            padding: 10px;
-            border-radius: 10px;
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-        }
-
-        .tab-button {
-            padding: 10px 20px;
-            border: none;
-            background: #f0f0f0;
-            cursor: pointer;
-            border-radius: 5px;
-            font-weight: 500;
-            transition: all 0.3s;
-        }
-
-        .tab-button.active {
-            background: #667eea;
-            color: white;
-        }
-
-        .tab-button:hover {
-            background: #667eea;
-            color: white;
-        }
-
-        .tab-content {
-            display: none;
-        }
-
-        .tab-content.active {
-            display: block;
-        }
-
-        .dashboard {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 20px;
-            margin-bottom: 30px;
-        }
-
-        .card {
-            background: white;
-            padding: 20px;
-            border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-        }
-
-        .card h3 {
-            margin-bottom: 15px;
-            color: #667eea;
-            font-size: 16px;
-        }
-
-        .status {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 10px 0;
-            border-bottom: 1px solid #eee;
-        }
-
-        .status:last-child {
-            border-bottom: none;
-        }
-
-        .status-label {
-            font-weight: 500;
-            color: #333;
-        }
-
-        .status-value {
-            padding: 5px 15px;
-            border-radius: 20px;
-            font-size: 12px;
-            font-weight: bold;
-        }
-
-        .status-running {
-            background: #4ade80;
-            color: white;
-        }
-
-        .status-stopped {
-            background: #ef4444;
-            color: white;
-        }
-
-        .status-unknown {
-            background: #a3a3a3;
-            color: white;
-        }
-
-        .buttons {
-            display: flex;
-            gap: 10px;
-            margin-top: 15px;
-            flex-wrap: wrap;
-        }
-
-        button {
-            padding: 8px 15px;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            font-weight: 500;
-            transition: all 0.3s;
-            font-size: 13px;
-        }
-
-        .btn-primary {
-            background: #667eea;
-            color: white;
-        }
-
-        .btn-primary:hover {
-            background: #5568d3;
-        }
-
-        .btn-danger {
-            background: #ef4444;
-            color: white;
-        }
-
-        .btn-danger:hover {
-            background: #dc2626;
-        }
-
-        .btn-secondary {
-            background: #e5e7eb;
-            color: #333;
-        }
-
-        .btn-secondary:hover {
-            background: #d1d5db;
-        }
-
-        .logs-container {
-            background: #1e1e1e;
-            color: #4ade80;
-            padding: 15px;
-            border-radius: 5px;
-            font-family: 'Monaco', 'Courier New', monospace;
-            font-size: 12px;
-            max-height: 400px;
-            overflow-y: auto;
-            line-height: 1.4;
-            margin-top: 15px;
-        }
-
-        .log-line {
-            margin: 2px 0;
-        }
-
-        .loading {
-            text-align: center;
-            padding: 20px;
-            color: #666;
-        }
-
-        .spinner {
-            border: 3px solid #f3f3f3;
-            border-top: 3px solid #667eea;
-            border-radius: 50%;
-            width: 20px;
-            height: 20px;
-            animation: spin 1s linear infinite;
-            display: inline-block;
-            margin-right: 10px;
-        }
-
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-
-        .error {
-            background: #fee2e2;
-            color: #991b1b;
-            padding: 15px;
-            border-radius: 5px;
-            margin-top: 10px;
-            border-left: 4px solid #ef4444;
-        }
-
-        .success {
-            background: #dcfce7;
-            color: #166534;
-            padding: 15px;
-            border-radius: 5px;
-            margin-top: 10px;
-            border-left: 4px solid #4ade80;
-        }
-
-        .info-text {
-            font-size: 12px;
-            color: #666;
-            margin-top: 10px;
-        }
-
-        .api-info {
-            background: #f0f4ff;
-            padding: 15px;
-            border-radius: 5px;
-            margin-bottom: 20px;
-            border-left: 4px solid #667eea;
-        }
-
-        .api-info h4 {
-            color: #667eea;
-            margin-bottom: 8px;
-        }
-
-        .api-info p {
-            font-size: 13px;
-            color: #555;
-            line-height: 1.6;
-        }
-
-        .api-info code {
-            background: white;
-            padding: 2px 6px;
-            border-radius: 3px;
-            font-family: monospace;
-            color: #764ba2;
-        }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MM2026 — Admin</title>
+  <link rel="stylesheet" href="admin.css">
 </head>
 <body>
-    <div class="container">
-        <!-- Header -->
-        <div class="header">
-            <h1>📺 MediaManager Admin Panel</h1>
-            <div class="header-info">
-                <div>Version: <strong id="app-version">--</strong></div>
-                <div>Hostname: <strong id="hostname">--</strong></div>
-                <div>IP: <strong id="ip-address">--</strong></div>
-                <div id="last-update">Dernier refresh: --</div>
-            </div>
-        </div>
+<div id="app">
 
-        <!-- Tabs -->
-        <div class="tabs">
-            <button class="tab-button active" onclick="switchTab('dashboard')">Dashboard</button>
-            <button class="tab-button" onclick="switchTab('logs')">Logs</button>
-            <button class="tab-button" onclick="switchTab('api')">API Documentation</button>
-        </div>
+  <!-- ══ Barre du haut ══════════════════════════════════════════════════════ -->
+  <header class="topbar">
 
-        <!-- TAB 1: Dashboard -->
-        <div id="dashboard" class="tab-content active">
-            <div class="dashboard" id="dashboard-grid">
-                <div class="loading"><span class="spinner"></span>Chargement...</div>
-            </div>
-            <div id="dashboard-message"></div>
-        </div>
-
-        <!-- TAB 2: Logs -->
-        <div id="logs" class="tab-content">
-            <div class="card">
-                <h3>Derniers logs (50 dernières lignes)</h3>
-                <button class="btn-primary" onclick="loadLogs()">Rafraîchir les logs</button>
-                <div class="logs-container" id="logs-container">
-                    <div class="loading"><span class="spinner"></span>Chargement des logs...</div>
-                </div>
-                <p class="info-text">Les logs se mettent à jour automatiquement toutes les 5 secondes.</p>
-            </div>
-        </div>
-
-        <!-- TAB 3: API Documentation -->
-        <div id="api" class="tab-content">
-            <div class="card">
-                <h3>Documentation API</h3>
-                
-                <div class="api-info">
-                    <h4>📚 Endpoints disponibles</h4>
-                    <p><strong>Dashboard:</strong> <code>GET /api/admin/dashboard</code></p>
-                    <p><strong>Logs:</strong> <code>GET /api/admin/logs?lines=50</code></p>
-                    <p><strong>Restart Service:</strong> <code>POST /api/admin/services/watcher/restart</code></p>
-                    <p><strong>Stop Service:</strong> <code>POST /api/admin/services/watcher/stop</code></p>
-                    <p><strong>Health Check:</strong> <code>GET /health</code></p>
-                </div>
-
-                <div class="api-info">
-                    <h4>🧪 Tester les APIs</h4>
-                    <p>Utilisez <strong>Swagger UI</strong> pour explorer et tester interactivement :</p>
-                    <p style="margin-top: 10px;">
-                        <a href="/docs" target="_blank" style="color: #667eea; text-decoration: none; font-weight: bold;">
-                            → Ouvrir Swagger UI
-                        </a>
-                    </p>
-                </div>
-
-                <div class="api-info">
-                    <h4>📡 Base URL</h4>
-                    <p><code id="base-url">Chargement...</code></p>
-                </div>
-
-                <div class="api-info">
-                    <h4>✅ Statut de la connexion API</h4>
-                    <button class="btn-primary" onclick="testAPI()">Tester la connexion</button>
-                    <div id="api-test-result"></div>
-                </div>
-            </div>
-        </div>
+    <!-- Logo + version -->
+    <div class="topbar-brand">
+      <span class="brand-name">MM2026</span>
+      <div class="brand-version">
+        <span id="app-version">—</span>
+        <span class="update-badge" id="update-badge" onclick="triggerUpdate()"></span>
+      </div>
     </div>
 
-    <script>
-        // Configuration
-        const API_BASE = `http://${window.location.hostname}:8000`;
+    <!-- Navigation par onglets -->
+    <nav class="topbar-nav">
+      <button class="nav-tab active" data-tab="dashboard" onclick="switchTab('dashboard')">Dashboard</button>
+      <button class="nav-tab" data-tab="mounts" onclick="switchTab('mounts')">Montages NAS</button>
+      <button class="nav-tab disabled" disabled title="Disponible prochainement">Fichiers</button>
+      <button class="nav-tab" data-tab="logs" onclick="switchTab('logs')">Logs</button>
+      <button class="nav-tab nav-right" data-tab="api" onclick="switchTab('api')">API</button>
+    </nav>
 
-        // Fonction pour changer d'onglet
-        function switchTab(tabName) {
-            // Cacher tous les onglets
-            document.querySelectorAll('.tab-content').forEach(el => {
-                el.classList.remove('active');
-            });
-            document.querySelectorAll('.tab-button').forEach(el => {
-                el.classList.remove('active');
-            });
+    <!-- Infos système (empilées à droite) -->
+    <div class="topbar-sysinfo">
+      <div class="sysinfo-row">
+        <span class="sysinfo-dot" id="conn-dot"></span>
+        <span>Host&nbsp;: <strong id="sys-host">—</strong></span>
+      </div>
+      <div class="sysinfo-row">
+        <span>IP&nbsp;: <strong id="sys-ip">—</strong></span>
+      </div>
+      <div class="sysinfo-row">
+        <span id="sys-time">—</span>
+        <button class="refresh-btn" onclick="refreshHeader()" title="Actualiser">↻</button>
+      </div>
+    </div>
 
-            // Afficher l'onglet sélectionné
-            document.getElementById(tabName).classList.add('active');
-            event.target.classList.add('active');
+  </header>
 
-            // Charger les données appropriées
-            if (tabName === 'dashboard') {
-                loadDashboard();
-            } else if (tabName === 'logs') {
-                loadLogs();
-            }
-        }
+  <!-- ══ Contenu ════════════════════════════════════════════════════════════ -->
+  <main>
 
-        // Charger le dashboard
-        async function loadDashboard() {
-            try {
-                const response = await fetch(`${API_BASE}/api/admin/dashboard`);
-                const data = await response.json();
+    <!-- ── Dashboard ──────────────────────────────────────────────────── -->
+    <div id="panel-dashboard" class="tab-panel active">
+      <div class="dashboard-grid" id="dash-grid">
+        <div class="card"><div class="empty-state"><span class="spinner"></span> Chargement…</div></div>
+      </div>
+      <div id="dash-msg"></div>
+    </div>
 
-                // Mettre à jour le header
-                document.getElementById('app-version').textContent = data.version;
-                document.getElementById('hostname').textContent = data.system.host;
-                document.getElementById('ip-address').textContent = data.system.ip;
-                document.getElementById('base-url').innerText = API_BASE;
-                document.getElementById('last-update').textContent = `Dernier refresh: ${new Date().toLocaleTimeString()}`;
+    <!-- ── Montages NAS ───────────────────────────────────────────────── -->
+    <div id="panel-mounts" class="tab-panel">
+      <div class="mounts-header">
+        <div class="mounts-title">
+          <h2>Montages NAS</h2>
+          <p>Source de vérité en base de données — les changements s'appliquent via « Appliquer &amp; Synchro »</p>
+        </div>
+        <div class="mounts-actions">
+          <button class="btn btn-secondary" onclick="Mounts.refresh()">↻ Statut</button>
+          <button class="btn btn-success" id="btn-sync" onclick="Mounts.sync()">⚡ Appliquer &amp; Synchro</button>
+          <button class="btn btn-primary" onclick="Mounts._openAdd()">+ Ajouter</button>
+        </div>
+      </div>
 
-                // Créer les cartes de services
-                let html = '';
-                
-                // Carte Watcher
-                const watcher = data.services.watcher;
-                html += `
-                    <div class="card">
-                        <h3>⚙️ ${watcher.name}</h3>
-                        <div class="status">
-                            <span class="status-label">Status</span>
-                            <span class="status-value status-${watcher.status.toLowerCase()}">${watcher.status.toUpperCase()}</span>
-                        </div>
-                        <div class="status">
-                            <span class="status-label">PID</span>
-                            <span>${watcher.pid}</span>
-                        </div>
-                        <div class="buttons">
-                            <button class="btn-primary" onclick="restartService('watcher')">🔄 Restart</button>
-                            <button class="btn-danger" onclick="stopService('watcher')">⏹️ Stop</button>
-                        </div>
-                    </div>
-                `;
+      <div class="stats-row">
+        <div class="stat-card blue"><div class="stat-val" id="stat-total">—</div><div class="stat-lbl">Total</div></div>
+        <div class="stat-card green"><div class="stat-val" id="stat-mounted">—</div><div class="stat-lbl">Montés</div></div>
+        <div class="stat-card red"><div class="stat-val" id="stat-missing">—</div><div class="stat-lbl">Non montés</div></div>
+      </div>
 
-                // Carte Database
-                const db = data.services.database;
-                html += `
-                    <div class="card">
-                        <h3>🗄️ ${db.name}</h3>
-                        <div class="status">
-                            <span class="status-label">Status</span>
-                            <span class="status-value status-${db.status.toLowerCase()}">${db.status.toUpperCase()}</span>
-                        </div>
-                        <div class="status">
-                            <span class="status-label">Type</span>
-                            <span>${db.type}</span>
-                        </div>
-                        <div class="status">
-                            <span class="status-label">Database</span>
-                            <span>${db.database}</span>
-                        </div>
-                    </div>
-                `;
+      <div class="sync-banner" id="sync-banner"></div>
 
-                // Carte Mounts
-                const mounts = data.services.mounts;
-                html += `
-                    <div class="card">
-                        <h3>📁 ${mounts.name}</h3>
-                        <div class="status">
-                            <span class="status-label">Status</span>
-                            <span class="status-value status-${mounts.status.toLowerCase()}">${mounts.status.toUpperCase()}</span>
-                        </div>
-                        <div class="status">
-                            <span class="status-label">Total</span>
-                            <span>${mounts.total}</span>
-                        </div>
-                        <div class="status">
-                            <span class="status-label">Healthy</span>
-                            <span>${mounts.healthy}</span>
-                        </div>
-                        <div class="status">
-                            <span class="status-label">Failed</span>
-                            <span>${mounts.failed}</span>
-                        </div>
-                    </div>
-                `;
+      <div class="cat-filters" id="cat-filters">
+        <button class="cat-btn active" onclick="Mounts._filterCat(this,'all')">Tous</button>
+      </div>
 
-                document.getElementById('dashboard-grid').innerHTML = html;
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Nom</th><th>Catégorie</th><th>Type</th><th>Source</th><th>Chemin local</th><th>Statut</th><th></th>
+            </tr>
+          </thead>
+          <tbody id="mounts-tbody">
+            <tr><td colspan="7"><div class="empty-state"><span class="spinner"></span> Chargement…</div></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
 
-                // Auto-refresh toutes les 5 secondes
-                setTimeout(loadDashboard, 5000);
-            } catch (error) {
-                document.getElementById('dashboard-message').innerHTML = `<div class="error">❌ Erreur: ${error.message}</div>`;
-            }
-        }
+    <!-- ── Logs ───────────────────────────────────────────────────────── -->
+    <div id="panel-logs" class="tab-panel">
+      <div class="card">
+        <div class="card-title">Journal du service</div>
+        <div class="log-controls">
+          <label for="log-lines" style="font-size:.82rem;color:var(--muted)">Lignes :</label>
+          <select id="log-lines" style="width:80px" onchange="loadLogs()">
+            <option value="50" selected>50</option>
+            <option value="100">100</option>
+            <option value="200">200</option>
+          </select>
+          <button class="btn btn-secondary" onclick="loadLogs()">↻ Rafraîchir</button>
+          <span style="font-size:.75rem;color:var(--muted);margin-left:auto">Auto-refresh 5 s</span>
+        </div>
+        <div class="log-box" id="log-box"><div class="log-line">Chargement…</div></div>
+      </div>
+    </div>
 
-        // Charger les logs
-        async function loadLogs() {
-            try {
-                const response = await fetch(`${API_BASE}/api/admin/logs?lines=50`);
-                const data = await response.json();
+    <!-- ── API ────────────────────────────────────────────────────────── -->
+    <div id="panel-api" class="tab-panel">
+      <div class="api-grid">
+        <div class="card">
+          <div class="card-title">Endpoints système</div>
+          <div class="api-block"><h4>Health / Dashboard</h4>
+            <div class="api-route"><span class="method method-get">GET</span><span>/health</span></div>
+            <div class="api-route"><span class="method method-get">GET</span><span>/api/admin/dashboard</span></div>
+            <div class="api-route"><span class="method method-get">GET</span><span>/api/admin/logs?lines=50</span></div>
+          </div>
+          <div class="api-block"><h4>Services</h4>
+            <div class="api-route"><span class="method method-post">POST</span><span>/api/admin/services/watcher/restart</span></div>
+            <div class="api-route"><span class="method method-post">POST</span><span>/api/admin/services/watcher/stop</span></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-title">Montages NAS</div>
+          <div class="api-block"><h4>CRUD</h4>
+            <div class="api-route"><span class="method method-get">GET</span><span>/api/admin/mounts</span></div>
+            <div class="api-route"><span class="method method-get">GET</span><span>/api/admin/mounts/status</span></div>
+            <div class="api-route"><span class="method method-post">POST</span><span>/api/admin/mounts</span></div>
+            <div class="api-route"><span class="method method-put">PUT</span><span>/api/admin/mounts/{id}</span></div>
+            <div class="api-route"><span class="method method-delete">DEL</span><span>/api/admin/mounts/{id}</span></div>
+          </div>
+          <div class="api-block"><h4>Synchronisation</h4>
+            <div class="api-route"><span class="method method-post">POST</span><span>/api/admin/mounts/sync</span></div>
+          </div>
+          <div class="api-block"><h4>Catégories</h4>
+            <div class="api-route"><span class="method method-get">GET</span><span>/api/admin/categories</span></div>
+            <div class="api-route"><span class="method method-post">POST</span><span>/api/admin/categories</span></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-title">Test &amp; Docs</div>
+          <div class="service-row" style="padding:.75rem 0">
+            <span class="service-label">Base URL</span>
+            <code id="base-url" style="font-family:var(--mono);font-size:.78rem;color:var(--accent)">—</code>
+          </div>
+          <div style="margin-top:.75rem">
+            <a href="/docs" target="_blank" class="btn btn-secondary">→ Swagger UI</a>
+          </div>
+          <div style="margin-top:1rem">
+            <button class="btn btn-secondary" onclick="testAPIConn()">Tester la connexion</button>
+            <div id="api-test-result" style="margin-top:.5rem"></div>
+          </div>
+        </div>
+      </div>
+    </div>
 
-                let html = '';
-                if (data.logs && data.logs.length > 0) {
-                    data.logs.forEach(line => {
-                        if (line.trim()) {
-                            html += `<div class="log-line">${escapeHtml(line)}</div>`;
-                        }
-                    });
-                } else {
-                    html = '<div class="log-line">Aucun log disponible</div>';
-                }
+  </main>
+</div>
 
-                document.getElementById('logs-container').innerHTML = html;
-                document.getElementById('logs-container').scrollTop = document.getElementById('logs-container').scrollHeight;
+<!-- ══ Modal : Ajout / Édition montage ════════════════════════════════════ -->
+<div class="overlay" id="overlay-mount">
+  <div class="modal">
+    <div class="modal-head">
+      <h3 id="modal-mount-title">Ajouter un montage</h3>
+      <button class="modal-close" onclick="Mounts.closeMount()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">Type de montage <span class="req">*</span></label>
+        <div class="type-grid">
+          <div class="type-card" data-type="smb" onclick="Mounts.selectType('smb')">
+            <div class="type-icon">🖥️</div>
+            <div class="type-name">SMB / CIFS</div>
+            <div class="type-desc">NAS Synology, QNAP, Windows</div>
+          </div>
+          <div class="type-card" data-type="nfs" onclick="Mounts.selectType('nfs')">
+            <div class="type-icon">🐧</div>
+            <div class="type-name">NFS</div>
+            <div class="type-desc">NAS Linux, Synology NFS</div>
+          </div>
+          <div class="type-card" data-type="sshfs" onclick="Mounts.selectType('sshfs')">
+            <div class="type-icon">🔐</div>
+            <div class="type-name">SSHFS</div>
+            <div class="type-desc">Serveur Linux via SSH</div>
+          </div>
+        </div>
+      </div>
 
-                // Auto-refresh logs toutes les 5 secondes
-                setTimeout(loadLogs, 5000);
-            } catch (error) {
-                document.getElementById('logs-container').innerHTML = `<div class="error">Erreur chargement logs: ${error.message}</div>`;
-            }
-        }
+      <!-- Champs dynamiques selon le type -->
+      <div id="type-fields" class="fields-section"></div>
 
-        // Restart un service
-        async function restartService(service) {
-            if (!confirm(`Êtes-vous sûr de vouloir redémarrer ${service} ?`)) return;
+      <!-- Catégorie + actif -->
+      <div class="fields-section show">
+        <div class="section-sep">Catégorie</div>
+        <div class="form-grid">
+          <div class="form-group">
+            <label class="form-label">Catégorie existante <span class="req">*</span></label>
+            <select id="f-cat-select">
+              <option value="">— Choisir —</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Ou créer une nouvelle</label>
+            <input id="f-newcat" type="text" placeholder="ex: concerts, sport…">
+            <span class="form-hint">Servira de nom de dossier dans MediaManagerMnt/</span>
+          </div>
+        </div>
+        <div class="toggle-row">
+          <span class="toggle-label">Actif</span>
+          <label class="toggle">
+            <input type="checkbox" id="f-active" checked>
+            <span class="slider"></span>
+          </label>
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-secondary" onclick="Mounts.closeMount()">Annuler</button>
+      <button class="btn btn-primary" id="btn-save-mount" onclick="Mounts.save()">Enregistrer</button>
+    </div>
+  </div>
+</div>
 
-            try {
-                const response = await fetch(`${API_BASE}/api/admin/services/${service}/restart`, {
-                    method: 'POST'
-                });
-                const data = await response.json();
+<!-- ══ Modal : Confirmation suppression ════════════════════════════════════ -->
+<div class="overlay" id="overlay-confirm">
+  <div class="modal modal-sm">
+    <div class="modal-head">
+      <h3>Confirmer la suppression</h3>
+      <button class="modal-close" onclick="Mounts.closeConfirm()">✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="confirm-msg">Supprimer ce montage de la base de données ?</p>
+      <p class="confirm-detail" id="confirm-detail"></p>
+      <p class="confirm-warn">⚠ Le démontage effectif aura lieu au prochain « Appliquer &amp; Synchro ».</p>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-secondary" onclick="Mounts.closeConfirm()">Annuler</button>
+      <button class="btn btn-danger" id="btn-confirm-delete" onclick="Mounts.confirmDelete()">Supprimer</button>
+    </div>
+  </div>
+</div>
 
-                if (data.status === 'success') {
-                    document.getElementById('dashboard-message').innerHTML = `<div class="success">✅ ${service} redémarré avec succès!</div>`;
-                    setTimeout(loadDashboard, 2000);
-                } else {
-                    document.getElementById('dashboard-message').innerHTML = `<div class="error">❌ Erreur: ${data.error}</div>`;
-                }
-            } catch (error) {
-                document.getElementById('dashboard-message').innerHTML = `<div class="error">❌ Erreur: ${error.message}</div>`;
-            }
-        }
-
-        // Stop un service
-        async function stopService(service) {
-            if (!confirm(`Êtes-vous sûr de vouloir arrêter ${service} ?`)) return;
-
-            try {
-                const response = await fetch(`${API_BASE}/api/admin/services/${service}/stop`, {
-                    method: 'POST'
-                });
-                const data = await response.json();
-
-                if (data.status === 'success') {
-                    document.getElementById('dashboard-message').innerHTML = `<div class="success">✅ ${service} arrêté!</div>`;
-                    setTimeout(loadDashboard, 2000);
-                } else {
-                    document.getElementById('dashboard-message').innerHTML = `<div class="error">❌ Erreur: ${data.error}</div>`;
-                }
-            } catch (error) {
-                document.getElementById('dashboard-message').innerHTML = `<div class="error">❌ Erreur: ${error.message}</div>`;
-            }
-        }
-
-        // Tester la connexion API
-        async function testAPI() {
-            const resultDiv = document.getElementById('api-test-result');
-            resultDiv.innerHTML = '<div class="loading"><span class="spinner"></span>Test en cours...</div>';
-
-            try {
-                const response = await fetch(`${API_BASE}/health`);
-                const data = await response.json();
-                resultDiv.innerHTML = `<div class="success">✅ API réactive! Status: ${data.status}</div>`;
-            } catch (error) {
-                resultDiv.innerHTML = `<div class="error">❌ Erreur connexion: ${error.message}</div>`;
-            }
-        }
-
-        // Utilitaires
-        function escapeHtml(text) {
-            const map = {
-                '&': '&amp;',
-                '<': '&lt;',
-                '>': '&gt;',
-                '"': '&quot;',
-                "'": '&#039;'
-            };
-            return text.replace(/[&<>"']/g, m => map[m]);
-        }
-
-        // Au chargement, charger le dashboard
-        window.addEventListener('load', () => {
-            loadDashboard();
-        });
-    </script>
+<script src="admin.js"></script>
+<script src="mounts.js"></script>
 </body>
 </html>

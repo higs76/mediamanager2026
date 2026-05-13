@@ -1,0 +1,228 @@
+/* =============================================================================
+   MediaManager 2026 — admin.js
+   Gestion : onglets, dashboard, logs, API, infos système, version/update
+   ============================================================================= */
+
+const API = `http://${window.location.hostname}:8000`;
+
+/* ── Onglets ──────────────────────────────────────────────────────────────── */
+let activeTab  = 'dashboard';
+let logTimer   = null;
+let dashTimer  = null;
+
+function switchTab(name) {
+  if (name === activeTab) return;
+
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-tab').forEach(b => b.classList.remove('active'));
+
+  document.getElementById('panel-' + name).classList.add('active');
+  document.querySelector(`.nav-tab[data-tab="${name}"]`).classList.add('active');
+
+  // Arrêter les timers des anciens onglets
+  clearTimeout(logTimer);
+  clearTimeout(dashTimer);
+
+  activeTab = name;
+
+  if (name === 'dashboard') startDashboard();
+  else if (name === 'logs')  startLogs();
+  else if (name === 'mounts') Mounts.init();
+}
+
+/* ── Dashboard ────────────────────────────────────────────────────────────── */
+function startDashboard() {
+  loadDashboard();
+}
+
+async function loadDashboard() {
+  if (activeTab !== 'dashboard') return;
+  try {
+    const r = await fetch(`${API}/api/admin/dashboard`);
+    const d = await r.json();
+
+    // Header système
+    setSystemInfo(d);
+
+    // Grille de cartes
+    const grid = document.getElementById('dash-grid');
+    const watcher = d.services?.watcher ?? {};
+    const db      = d.services?.database ?? {};
+    const mounts  = d.services?.mounts  ?? {};
+
+    grid.innerHTML = `
+      ${serviceCard('⚙️', watcher.name || 'Watcher', watcher, true)}
+      ${serviceCard('🗄️', db.name      || 'Database', db,  false)}
+      ${mountCard(mounts)}
+    `;
+  } catch (e) {
+    showDashMsg('error', `Connexion impossible : ${e.message}`);
+  }
+  dashTimer = setTimeout(loadDashboard, 5000);
+}
+
+function serviceCard(icon, name, svc, withActions) {
+  const st = (svc.status || 'unknown').toLowerCase();
+  const cls = st === 'running' ? 'badge-green' : st === 'stopped' ? 'badge-red' : 'badge-muted';
+  let rows = `
+    <div class="service-row">
+      <span class="service-label">Status</span>
+      <span class="badge ${cls}"><span class="badge-dot"></span>${(svc.status || '—').toUpperCase()}</span>
+    </div>`;
+  if (svc.pid)      rows += row('PID', svc.pid);
+  if (svc.type)     rows += row('Type', svc.type);
+  if (svc.database) rows += row('Base', svc.database);
+
+  const actions = withActions ? `
+    <div class="card-actions">
+      <button class="btn btn-secondary" onclick="svcAction('watcher','restart')">↺ Restart</button>
+      <button class="btn btn-danger"    onclick="svcAction('watcher','stop')">▪ Stop</button>
+    </div>` : '';
+
+  return `<div class="card"><div class="card-title">${icon} ${name}</div>${rows}${actions}</div>`;
+}
+
+function mountCard(m) {
+  return `
+    <div class="card">
+      <div class="card-title">📁 ${m.name || 'Montages'}</div>
+      ${row('Total',      m.total   ?? '—')}
+      ${row('Montés',     m.healthy ?? '—')}
+      ${row('En erreur',  m.failed  ?? '—')}
+      <div class="card-actions">
+        <button class="btn btn-secondary" onclick="switchTab('mounts')">→ Gérer les montages</button>
+      </div>
+    </div>`;
+}
+
+function row(label, val) {
+  return `<div class="service-row"><span class="service-label">${label}</span><span class="service-val">${val}</span></div>`;
+}
+
+async function svcAction(svc, action) {
+  if (!confirm(`${action === 'restart' ? 'Redémarrer' : 'Arrêter'} le service ${svc} ?`)) return;
+  try {
+    const r = await fetch(`${API}/api/admin/services/${svc}/${action}`, { method: 'POST' });
+    const d = await r.json();
+    showDashMsg(d.status === 'success' ? 'ok' : 'error', d.message || d.error);
+    setTimeout(loadDashboard, 1500);
+  } catch (e) {
+    showDashMsg('error', e.message);
+  }
+}
+
+function showDashMsg(type, msg) {
+  const el = document.getElementById('dash-msg');
+  const cls = type === 'ok' ? 'badge-green' : 'badge-red';
+  el.innerHTML = `<div class="badge ${cls}" style="margin-top:.75rem">${msg}</div>`;
+  setTimeout(() => { el.innerHTML = ''; }, 4000);
+}
+
+/* ── Infos système (header) ───────────────────────────────────────────────── */
+function setSystemInfo(d) {
+  setText('sys-host', d.system?.host ?? '—');
+  setText('sys-ip',   d.system?.ip   ?? '—');
+  setText('sys-time', new Date().toLocaleTimeString('fr-FR'));
+  setVersion(d.version, d.latest_version);
+}
+
+function setVersion(current, latest) {
+  setText('app-version', current ?? '—');
+  const badge = document.getElementById('update-badge');
+  if (latest && latest !== current) {
+    badge.textContent = `↑ ${latest}`;
+    badge.title = `Nouvelle version disponible : ${latest}. Cliquer pour mettre à jour.`;
+    badge.classList.add('visible');
+  } else {
+    badge.classList.remove('visible');
+  }
+}
+
+function setText(id, val) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = val;
+}
+
+async function refreshHeader() {
+  const btn = document.querySelector('.refresh-btn');
+  if (btn) btn.textContent = '…';
+  try {
+    const r = await fetch(`${API}/api/admin/dashboard`);
+    const d = await r.json();
+    setSystemInfo(d);
+  } catch (_) {}
+  if (btn) btn.textContent = '↻';
+}
+
+/* ── Logs ─────────────────────────────────────────────────────────────────── */
+function startLogs() { loadLogs(); }
+
+async function loadLogs() {
+  if (activeTab !== 'logs') return;
+  const lines = document.getElementById('log-lines')?.value ?? 50;
+  try {
+    const r = await fetch(`${API}/api/admin/logs?lines=${lines}`);
+    const d = await r.json();
+    const box = document.getElementById('log-box');
+    if (d.logs?.length) {
+      box.innerHTML = d.logs
+        .filter(l => l.trim())
+        .map(l => `<div class="log-line ${classifyLog(l)}">${esc(l)}</div>`)
+        .join('');
+      box.scrollTop = box.scrollHeight;
+    } else {
+      box.innerHTML = '<div class="log-line">Aucun log disponible</div>';
+    }
+  } catch (e) {
+    document.getElementById('log-box').innerHTML =
+      `<div class="log-line error">Erreur : ${e.message}</div>`;
+  }
+  logTimer = setTimeout(loadLogs, 5000);
+}
+
+function classifyLog(line) {
+  const l = line.toLowerCase();
+  if (l.includes('error') || l.includes('erreur') || l.includes('exception')) return 'error';
+  if (l.includes('warn')  || l.includes('warning'))  return 'warn';
+  if (l.includes('info'))  return 'info';
+  if (l.includes('ok') || l.includes('success') || l.includes('démarr')) return 'ok';
+  return '';
+}
+
+/* ── API tab ──────────────────────────────────────────────────────────────── */
+async function testAPIConn() {
+  const el = document.getElementById('api-test-result');
+  el.innerHTML = '<span class="spinner"></span>';
+  try {
+    const r = await fetch(`${API}/health`);
+    const d = await r.json();
+    el.innerHTML = `<span class="badge badge-green">✓ ${d.status ?? 'ok'}</span>`;
+  } catch (e) {
+    el.innerHTML = `<span class="badge badge-red">✗ ${e.message}</span>`;
+  }
+}
+
+/* ── Update ───────────────────────────────────────────────────────────────── */
+async function triggerUpdate() {
+  if (!confirm('Lancer la mise à jour de MediaManager ?')) return;
+  try {
+    const r = await fetch(`${API}/api/admin/update`, { method: 'POST' });
+    const d = await r.json();
+    alert(d.message ?? 'Mise à jour lancée');
+  } catch (e) {
+    alert('Erreur : ' + e.message);
+  }
+}
+
+/* ── Utilitaires ──────────────────────────────────────────────────────────── */
+function esc(s) {
+  return String(s ?? '')
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+/* ── Init ─────────────────────────────────────────────────────────────────── */
+window.addEventListener('load', () => {
+  document.getElementById('base-url').textContent = API;
+  startDashboard();
+});

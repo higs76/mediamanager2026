@@ -44,16 +44,6 @@ SMB_DEFAULT_USERNAME = os.getenv('SMB_DEFAULT_USERNAME', 'user')
 SMB_DEFAULT_PASSWORD = os.getenv('SMB_DEFAULT_PASSWORD', 'password')
 
 # ==========================================
-# Categories (types de médias)
-# ==========================================
-MEDIA_CATEGORIES = [
-    'series',
-    'films',
-    'animes',
-    'documentaires'
-]
-
-# ==========================================
 # Logging
 # ==========================================
 LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
