@@ -136,32 +136,23 @@ fi
 log_info "Updating Proxmox templates..."
 pveam update >/dev/null
 TEMPLATE=$(pveam available -section system | grep "ubuntu-24.04-standard" | head -n1 | awk '{print $2}')
-if [ -z "$TEMPLATE" ]; then    
-    log_info "template not found, downloading template: $TEMPLATE"
-    pveam download local $TEMPLATE
+
+if [ -z "$TEMPLATE" ]; then
+    log_error "No Ubuntu 24.04 template found in Proxmox repository"
+    exit 1
+fi
+log_success "Found template: $TEMPLATE"
+ 
+# 2. Télécharger uniquement si pas déjà présent
+if pveam list "$TEMPLATE_STORAGE" 2>/dev/null | grep -q "$TEMPLATE"; then
+    log_success "Template already downloaded, skipping"
 else
-    log_success "Found template: $TEMPLATE"
+    log_info "Downloading template: $TEMPLATE"
+    pveam download "$TEMPLATE_STORAGE" "$TEMPLATE"
 fi
 
-
 # Créer le LXC
-# 1. Récupérer dynamiquement le nom du dernier template Ubuntu 24.04 disponible
-log_info "Updating Proxmox templates..."
-pveam update >/dev/null
-TEMPLATE=$(pveam available -section system | grep "ubuntu-24.04-standard" | head -n1 | awk '{print $2}')
-
-# 2. Télécharger ce template spécifique
-log_info "Downloading template: $TEMPLATE"
-pveam download local $TEMPLATE
-
 log_info "Creating LXC container $CTID..."
-
-#pct create $CTID local:vztmpl/$TEMPLATE
- #   --arch amd64 --cores $VCPU --memory $MEMORY --swap 0 \
- #  --storage $STORAGE --rootfs $STORAGE:$DISK \
- #   --hostname $HOSTNAME --net0 name=eth0,bridge=$BRG,type=veth \
- #   --ostype ubuntu --description "MediaManager 2026" \
- #   --unprivileged 1 --onboot 1 --start 1
 
 pct create $CTID "$TEMPLATE_STORAGE:vztmpl/$TEMPLATE" \
   --hostname "$HOSTNAME" \
@@ -196,67 +187,13 @@ if [ "$READY" -ne 1 ]; then
     exit 1
 fi
 
-# Installer MediaManager
-log_info "Installing MediaManager..."
-pct exec $CTID -- bash << 'EOF'
-set -e
-export DEBIAN_FRONTEND=noninteractive
-
-apt-get update
-apt-get upgrade -y
-apt-get install -y python3.12 python3.12-venv python3-pip postgresql postgresql-contrib git cifs-utils ffmpeg mediainfo curl wget nano sudo
-
-useradd -m -s /bin/bash mediamanager 2>/dev/null || true
-usermod -aG sudo mediamanager 2>/dev/null || true
-echo "mediamanager ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers 2>/dev/null || true
-
-mkdir -p /home/mediamanager/{app,"MediaManagerMnt/{series,films,animes,documentaires}",logs}
-chown -R mediamanager:mediamanager /home/mediamanager
-
-systemctl start postgresql
-systemctl enable postgresql
-sleep 2
-
-sudo -u postgres psql -c "CREATE USER mediamanager WITH PASSWORD 'mediamanager';" 2>/dev/null || true
-sudo -u postgres psql -c "ALTER USER mediamanager CREATEDB;" 2>/dev/null || true
-sudo -u postgres psql -c "CREATE DATABASE mediamanager_db OWNER mediamanager;" 2>/dev/null || true
-
-cd /home/mediamanager/app
-git clone -b main https://github.com/higs76/mediamanager2026.git . || git pull origin main
-
-python3.12 -m venv venv
-venv/bin/pip install --upgrade pip
-venv/bin/pip install -r requirements.txt
-
-cp .env.example .env
-sed -i 's/changeme/mediamanager/g' .env
-
-sudo -u postgres psql -U mediamanager -d mediamanager_db -f database/schema.sql 2>/dev/null || true
-
-cat > /etc/systemd/system/mediamanager-watcher.service << 'SYSCTL'
-[Unit]
-Description=MediaManager Watcher Service
-After=network.target postgresql.service
-Wants=postgresql.service
-
-[Service]
-Type=simple
-User=mediamanager
-WorkingDirectory=/home/mediamanager/app
-Environment="PATH=/home/mediamanager/app/venv/bin"
-ExecStart=/home/mediamanager/app/venv/bin/python run.py
-Restart=on-failure
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-SYSCTL
-
-systemctl daemon-reload
-systemctl enable mediamanager-watcher.service
-systemctl start mediamanager-watcher.service
-EOF
-
+# Installer MediaManager en appelant proxmox-install.sh depuis le repo
+# Pas de duplication : toute la logique d'installation est dans ce seul fichier.
+# Si proxmox-install.sh est corrigé, le fix s'applique automatiquement ici.
+log_info "Installing MediaManager inside container $CTID..."
+pct exec $CTID -- bash -c \
+    "curl -fsSL https://raw.githubusercontent.com/higs76/mediamanager2026/main/scripts/proxmox-install.sh | bash"
+ 
 log_success "Installation complete!"
 
 CT_IP=""
@@ -267,7 +204,6 @@ for i in {1..30}; do
     if [ -n "$CT_IP" ]; then
         break
     fi
-
     sleep 2
 done
 

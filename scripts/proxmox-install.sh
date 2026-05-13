@@ -117,15 +117,24 @@ install_dependencies() {
 
 create_user() {
     log_info "Creating mediamanager user..."
-    
+
+
     if id "mediamanager" &>/dev/null; then
         log_warn "User mediamanager already exists"
     else
         useradd -m -s /bin/bash mediamanager
-        usermod -aG sudo mediamanager
-        echo "mediamanager ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
         log_success "User mediamanager created"
     fi
+
+    # Droits sudo limités : uniquement mount/umount (montages SMB)
+    # et redémarrage du service watcher.
+    # Fichier dédié dans sudoers.d → pas de doublon si le script est relancé.
+    cat > /etc/sudoers.d/mediamanager << 'SUDOEOF'
+mediamanager ALL=(ALL) NOPASSWD: /bin/mount, /bin/umount, /usr/bin/systemctl restart mediamanager-watcher
+SUDOEOF
+    chmod 440 /etc/sudoers.d/mediamanager
+    log_success "Sudoers configured (mount/umount/restart only)"
+
 }
 
 # ==========================================
@@ -136,10 +145,12 @@ create_directories() {
     log_info "Creating directories..."
     
     mkdir -p ${APP_DIR}
-    mkdir -p /home/mediamanager/MediaManagerMnt/{series,films,animes,documentaires}
+    mkdir -p /home/mediamanager/MediaManagerMnt
     mkdir -p /home/mediamanager/logs
     mkdir -p /home/mediamanager/data
-    
+
+    # Les sous-dossiers de MediaManagerMnt (series, films, etc.) sont créés
+    # par l'application au démarrage, selon la configuration en base de données.
     chown -R mediamanager:mediamanager /home/mediamanager
     
     log_success "Directories created"
@@ -176,18 +187,24 @@ setup_python() {
     
     cd ${APP_DIR}
     
-    # Créer venv
-    python${PYTHON_VERSION} -m venv venv
+    # Créer le venv directement en tant que mediamanager
+    # (si on le crée en root puis chown, certains chemins internes du venv
+    # peuvent garder des références au home de root et poser des problèmes)
+    sudo -u mediamanager python${PYTHON_VERSION} -m venv venv
     
-    # Installer pip et dépendances
-    ./venv/bin/pip install --upgrade pip
-    ./venv/bin/pip install -r requirements.txt
+    sudo -u mediamanager ./venv/bin/pip install --upgrade pip
+    sudo -u mediamanager ./venv/bin/pip install -r requirements.txt
     
-    # Créer .env
-    cp .env.example .env
-    sed -i 's/changeme/mediamanager/g' .env
-    
-    chown -R mediamanager:mediamanager ${APP_DIR}
+    # Créer .env uniquement s'il n'existe pas déjà
+    # (évite d'écraser la config si on relance le script après une modif manuelle)
+    if [ ! -f .env ]; then
+        cp .env.example .env
+        sed -i 's/changeme/mediamanager/g' .env
+        chown mediamanager:mediamanager .env
+        chmod 600 .env
+    else
+        log_warn ".env already exists, not overwritten"
+    fi
     
     log_success "Python environment configured"
 }
@@ -219,14 +236,19 @@ setup_postgresql() {
     
     # Créer utilisateur et BD
     log_info "Creating database user and schema..."
-    
+
     sudo -u postgres psql -c "CREATE USER mediamanager WITH PASSWORD 'mediamanager';" 2>/dev/null || log_warn "User already exists"
     sudo -u postgres psql -c "ALTER USER mediamanager CREATEDB;" 2>/dev/null || true
     sudo -u postgres psql -c "CREATE DATABASE mediamanager_db OWNER mediamanager;" 2>/dev/null || log_warn "Database already exists"
     
-    # Initialiser les tables
+    
+    
+    # Initialiser les tables.
+    # On reste avec l'utilisateur postgres (superuser Linux) pour exécuter le SQL.
+    # PostgreSQL utilise l'auth "peer" par défaut : l'user Linux doit correspondre
+    # à l'user PostgreSQL. On ne peut pas faire "sudo -u postgres psql -U mediamanager".
     log_info "Initializing database schema..."
-    sudo -u postgres psql -U mediamanager -d mediamanager_db -f ${APP_DIR}/database/schema.sql 2>/dev/null || log_warn "Schema might already exist"
+    sudo -u postgres psql -d mediamanager_db -f ${APP_DIR}/database/schema.sql 2>/dev/null || log_warn "Schema might already exist"
     
     log_success "PostgreSQL configured"
 }
@@ -238,7 +260,7 @@ setup_postgresql() {
 setup_systemd_service() {
     log_info "Creating systemd service..."
     
-    cat > /etc/systemd/system/mediamanager-watcher.service << 'EOF'
+    cat > /etc/systemd/system/mediamanager-watcher.service << 'SVCEOF'
 [Unit]
 Description=MediaManager Watcher Service
 After=network.target postgresql.service
@@ -248,6 +270,7 @@ Wants=postgresql.service
 Type=simple
 User=mediamanager
 WorkingDirectory=/home/mediamanager/app
+EnvironmentFile=/home/mediamanager/app/.env
 Environment="PATH=/home/mediamanager/app/venv/bin"
 ExecStart=/home/mediamanager/app/venv/bin/python run.py
 Restart=on-failure
@@ -255,7 +278,7 @@ RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
-EOF
+SVCEOF
 
     systemctl daemon-reload
     systemctl enable mediamanager-watcher.service
@@ -313,7 +336,7 @@ print_summary() {
     echo "🔧 Useful Commands:"
     echo "   systemctl status mediamanager-watcher     # Check status"
     echo "   systemctl restart mediamanager-watcher    # Restart service"
-    echo "   systemctl logs -u mediamanager-watcher -f # View logs"
+    echo "   journalctl -u mediamanager-watcher -f     # View logs (Ctrl+C to exit)"
     echo ""
     echo "=========================================="
     echo ""
