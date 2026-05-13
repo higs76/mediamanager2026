@@ -342,7 +342,7 @@
 
                 <div class="api-info">
                     <h4>📡 Base URL</h4>
-                    <p><code id="base-url">http://192.168.1.56:8000</code></p>
+                    <p><code id="base-url">Chargement...</code></p>
                 </div>
 
                 <div class="api-info">
@@ -390,6 +390,7 @@
                 document.getElementById('app-version').textContent = data.version;
                 document.getElementById('hostname').textContent = data.system.host;
                 document.getElementById('ip-address').textContent = data.system.ip;
+                document.getElementById('base-url').innerText = API_BASE;
                 document.getElementById('last-update').textContent = `Dernier refresh: ${new Date().toLocaleTimeString()}`;
 
                 // Créer les cartes de services
