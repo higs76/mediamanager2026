@@ -16,7 +16,7 @@ STORAGE=${var_container_storage:-"local-lvm"}
 TEMPLATE_STORAGE=${var_template_storage:-"local"}
 MEMORY=${var_ram:-"4096"}
 VCPU=${var_cpu:-"2"}
-DISK_SIZE=${var_disk:-"20"}
+DISK_SIZE=${var_disk:-"6"}
 BRG=${var_brg:-"vmbr0"}
 NET=${var_net:-"dhcp"}
 
