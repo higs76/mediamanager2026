@@ -260,37 +260,95 @@ const Mounts = (() => {
     if (act) act.checked = m.active !== false;
   }
 
-  function buildPayload() {
-    const cat    = document.getElementById('f-cat-select')?.value;
-    const newCat = document.getElementById('f-newcat')?.value.trim();
-    const category = newCat || cat;
 
+  /* ── Browse réseau ────────────────────────────────────────────────────── */
+  async function _browse(type) {
+    const server = getVal('f-server').trim();
+    if (!server) { alert('Saisir d\'abord l\'adresse du serveur'); return; }
+ 
+    const box = document.getElementById('browse-results');
+    box.className = 'browse-results show';
+    box.innerHTML = '<div class="browse-empty"><span class="spinner"></span> Recherche…</div>';
+ 
+    const username = getVal('f-user') || null;
+    const password = getVal('f-password') || null;
+    let url = `${API}/api/admin/mounts/browse?type=${type}&server=${encodeURIComponent(server)}`;
+    if (username) url += `&username=${encodeURIComponent(username)}`;
+    if (password) url += `&password=${encodeURIComponent(password)}`;
+ 
+    try {
+      const r = await fetch(url);
+      const d = await r.json();
+      if (d.error && !d.shares?.length) {
+        box.innerHTML = `<div class="browse-error">⚠ ${esc2(d.error)}</div>`;
+        return;
+      }
+      if (!d.shares?.length) {
+        box.innerHTML = '<div class="browse-empty">Aucun partage trouvé</div>';
+        return;
+      }
+      box.innerHTML = d.shares.map(s =>
+        `<div class="browse-item" onclick="Mounts._pickShare('${esc2(s)}')">${esc2(s)}</div>`
+      ).join('');
+    } catch (e) {
+      box.innerHTML = `<div class="browse-error">Erreur : ${esc2(e.message)}</div>`;
+    }
+  }
+ 
+  function _pickShare(share) {
+    setVal('f-share', share);
+    _clearBrowse();
+  }
+ 
+  function _clearBrowse() {
+    const box = document.getElementById('browse-results');
+    if (box) { box.className = 'browse-results'; box.innerHTML = ''; }
+  }
+ 
+  /* ── Collapse options avancées ────────────────────────────────────────── */
+  function _toggleCollapse(toggleEl) {
+    toggleEl.classList.toggle('open');
+    const body = toggleEl.nextElementSibling;
+    if (body) body.classList.toggle('open');
+  }
+
+  /* ── Payload ──────────────────────────────────────────────────────────── */
+  function buildPayload() {
+    const catSelect = document.getElementById('f-cat-select')?.value;
+    const newCat    = document.getElementById('f-newcat')?.value.trim();
+    // Priorité : sélection dans dropdown, sinon nouvelle catégorie saisie
+    const categoryName = catSelect || newCat;
+ 
+    const server  = getVal('f-server').trim();
+    const share   = getVal('f-share').trim();
+    const options = getVal('f-options');
+ 
+    if (!selectedType) { alert('Choisir un type de montage'); return null; }
+    if (!server)        { alert('L\'adresse du serveur est requise'); return null; }
+    if (!share)         { alert('Le partage/export est requis'); return null; }
+    if (!categoryName)  { alert('Choisir ou créer une catégorie'); return null; }
+ 
+    // Résoudre l'id de catégorie depuis le nom
+    // Si nouvelle catégorie, on l'envoie au serveur qui la crée avant le montage
     const base = {
-      mount_type: selectedType,
-      category,
+      mount_type:   selectedType,
+      category_name: categoryName,   // l'API résoudra l'id
       active: document.getElementById('f-active')?.checked ?? true,
     };
-
-    // Champs communs
-    const server  = getVal('f-server');
-    const share   = getVal('f-share');
-    const options = getVal('f-options');
-
-    if (!selectedType || !server || !share || !category) {
-      alert('Remplir les champs obligatoires (*)');
-      return null;
-    }
-
+ 
     if (selectedType === 'smb') {
-      return { ...base, server, share, mount_options: options,
-        smb_user:     getVal('f-user'),
-        smb_password: getVal('f-password'),
-        smb_domain:   getVal('f-domain') || 'WORKGROUP',
-        smb_version:  getVal('f-smb-version') || '3.0' };
+      return { ...base, server, share,
+        smb_options: options,
+        username:    getVal('f-user')        || null,
+        password:    getVal('f-password')    || null,
+        domain:      getVal('f-domain')      || 'WORKGROUP',
+        smb_version: getVal('f-smb-version') || '3.0' };
     }
     if (selectedType === 'nfs') {
-      return { ...base, server, share, mount_options: options,
-        nfs_version: getVal('f-nfs-version') || '4' };
+      return { ...base, server,
+        export_path:  share,
+        nfs_options:  options,
+        nfs_version:  parseInt(getVal('f-nfs-version') || '4') };
     }
     return base;
   }

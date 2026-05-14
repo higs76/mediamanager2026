@@ -574,3 +574,80 @@ select option { background: var(--surface); }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+
+
+
+/* ── Section repliable (Options avancées) ────────────────────────────────── */
+.collapsible-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  user-select: none;
+  padding: .4rem 0;
+  margin: .85rem 0 0;
+}
+.collapsible-toggle .section-sep {
+  margin: 0;
+  flex: 1;
+  cursor: pointer;
+}
+.collapse-arrow {
+  font-size: .75rem;
+  color: var(--muted);
+  margin-left: .5rem;
+  transition: transform .2s;
+  flex-shrink: 0;
+}
+.collapsible-toggle.open .collapse-arrow { transform: rotate(180deg); }
+
+.collapsible-body {
+  display: none;
+  padding-top: .5rem;
+}
+.collapsible-body.open { display: block; }
+
+/* ── Browse réseau ────────────────────────────────────────────────────────── */
+.browse-row {
+  display: flex;
+  gap: .5rem;
+  align-items: flex-start;
+}
+.browse-row input { flex: 1; }
+
+.browse-results {
+  display: none;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  max-height: 160px;
+  overflow-y: auto;
+  margin-top: .35rem;
+}
+.browse-results.show { display: block; }
+.browse-item {
+  padding: .45rem .75rem;
+  font-family: var(--mono);
+  font-size: .8rem;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border2);
+  transition: background .1s;
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+}
+.browse-item:last-child { border-bottom: none; }
+.browse-item:hover { background: rgba(9,105,218,.06); color: var(--accent); }
+[data-theme="dark"] .browse-item:hover { background: rgba(88,166,255,.08); }
+.browse-item::before { content: '📁'; font-size: .85rem; }
+.browse-error {
+  padding: .6rem .75rem;
+  font-size: .78rem;
+  color: var(--red);
+  font-family: var(--mono);
+}
+.browse-empty {
+  padding: .6rem .75rem;
+  font-size: .78rem;
+  color: var(--muted);
+}

@@ -24,6 +24,7 @@ from watcher.config import (
     DATABASE_URL, MOUNT_BASE_PATH, LOG_LEVEL, LOG_FILE
 )
 from watcher.database import test_db_connection
+from watcher.api import router as admin_router
 
 # ==========================================
 # Configuration Logging
@@ -65,6 +66,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ==========================================
+# Router Admin (montages, catégories, browse)
+# ==========================================
+app.include_router(admin_router)
 
 # ==========================================
 # Servir les fichiers statiques (Frontend Admin)
