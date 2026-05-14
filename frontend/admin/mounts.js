@@ -184,10 +184,10 @@ const Mounts = (() => {
 
     tbody.innerHTML = filtered.map(m => `
       <tr data-id="${m.id}">
-        <td>${esc2(m.name)}</td>
-        <td><span class="badge badge-blue">${esc2(m.category)}</span></td>
+        <td><strong>${m.id} - ${esc2(m.category_name)}</strong></td>
+        <td><span class="badge badge-blue">${esc2(m.category_name)}</span></td>
         <td><span class="badge badge-muted">${esc2(m.mount_type || 'smb').toUpperCase()}</span></td>
-        <td class="td-server">${esc2(m.server)}${esc2(m.share)}</td>
+        <td class="td-server">${esc2(m.server)}${esc2(m.share || m.export_path)}</td>
         <td class="td-mono" title="${esc2(m.local_path)}">${esc2(m.local_path)}</td>
         <td>${mountedBadge(m.is_mounted)}</td>
         <td>
@@ -249,13 +249,16 @@ const Mounts = (() => {
 
   function fillForm(m) {
     setVal('f-server',      m.server      ?? '');
-    setVal('f-share',       m.share       ?? '');
+    // SMB : le partage s'appelle "share", NFS : "export_path"
+    setVal('f-share',       m.share         ?? m.export_path ?? '');
     setVal('f-user',        m.smb_user    ?? '');
-    setVal('f-domain',      m.smb_domain  ?? 'WORKGROUP');
-    setVal('f-options',     m.mount_options ?? '');
+    setVal('f-domain',      m.smb_domain  ?? 'WORKGROUP');    
     setVal('f-smb-version', m.smb_version ?? '3.0');
     setVal('f-nfs-version', m.nfs_version ?? '4');
-    setVal('f-cat-select',  m.category    ?? '');
+    // Options : smb_options ou nfs_options selon le type
+    setVal('f-options',
+      m.mount_type === 'nfs' ? (m.nfs_options ?? '') : (m.smb_options ?? ''));
+    setVal('f-cat-select',  m.category_name ?? '');   // API retourne "category_name"
     const act = document.getElementById('f-active');
     if (act) act.checked = m.active !== false;
   }
@@ -401,7 +404,8 @@ const Mounts = (() => {
     const m = allMounts.find(x => x.id === id);
     if (!m) return;
     deletingId = id;
-    document.getElementById('confirm-detail').textContent = `${m.name} — ${m.server}${m.share}`;
+    document.getElementById('confirm-detail').textContent =
+      `${m.id} - ${m.category_name} (${m.server}${m.share || m.export_path || ''})`;
     openOverlay('overlay-confirm');
   }
 

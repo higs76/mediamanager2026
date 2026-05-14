@@ -211,28 +211,39 @@ def create_mount(payload: MountCreate):
     """Crée un montage en BDD (ne monte pas encore)."""
     if payload.mount_type not in ("smb", "nfs"):
         raise HTTPException(400, "mount_type doit être 'smb' ou 'nfs'")
+    
+    cat_name = payload.category_name.strip().lower()
+    if not cat_name:
+        raise HTTPException(400, "category_name ne peut pas être vide")
 
     try:
         with engine.connect() as conn:
-            # Vérifier que la catégorie existe
+# Résoudre la catégorie par nom — la créer si elle n'existe pas encore
             cat = conn.execute(
-                text("SELECT id, name FROM categories WHERE id = :id"),
-                {"id": payload.category_id}
+                text("SELECT id, name FROM categories WHERE name = :n"),
+                {"n": cat_name}
             ).fetchone()
             if not cat:
-                raise HTTPException(400, f"Catégorie {payload.category_id} introuvable")
+                cat = conn.execute(
+                    text("INSERT INTO categories (name) VALUES (:n) RETURNING id, name"),
+                    {"n": cat_name}
+                ).fetchone()
+                logger.info(f"Catégorie créée automatiquement : {cat_name}")
+ 
+            category_id   = cat[0]
+            category_name = cat[1]
 
-            # Créer le header mounts avec local_path provisoire ("" puis update)
+            # Créer le header mounts avec local_path provisoire
             row = conn.execute(text("""
                 INSERT INTO mounts (mount_type, category_id, local_path, active)
                 VALUES (:type, :cat, '', :active)
                 RETURNING id
-            """), {"type": payload.mount_type, "cat": payload.category_id,
+            """), {"type": payload.mount_type, "cat": category_id,
                    "active": payload.active}).fetchone()
             mount_id = row[0]
 
             # Calculer et mettre à jour local_path maintenant qu'on a l'id
-            local_path = _build_local_path(mount_id, cat[1])
+            local_path = _build_local_path(mount_id, category_name)
             conn.execute(text(
                 "UPDATE mounts SET local_path = :p WHERE id = :id"
             ), {"p": local_path, "id": mount_id})
