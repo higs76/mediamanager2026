@@ -95,40 +95,6 @@ const Mounts = (() => {
             <input id="f-options" type="text" value="rw,soft,timeo=30">
           </div>
         </div>`
-    },
-    sshfs: {
-      icon: '🔐',
-      name: 'SSHFS',
-      desc: 'Serveur Linux distant via SSH',
-      fields: `
-        <div class="section-sep">Connexion SSH</div>
-        <div class="form-grid">
-          <div class="form-group">
-            <label class="form-label">Utilisateur SSH <span class="req">*</span></label>
-            <input id="f-user" type="text" placeholder="admin">
-          </div>
-          <div class="form-group">
-            <label class="form-label">Serveur <span class="req">*</span></label>
-            <input id="f-server" type="text" placeholder="192.168.1.10 ou mon-serveur">
-          </div>
-          <div class="form-group">
-            <label class="form-label">Port SSH</label>
-            <input id="f-ssh-port" type="number" value="22">
-          </div>
-          <div class="form-group">
-            <label class="form-label">Chemin distant <span class="req">*</span></label>
-            <input id="f-share" type="text" placeholder="/home/media/series">
-          </div>
-          <div class="form-group form-full">
-            <label class="form-label">Clé privée SSH</label>
-            <input id="f-ssh-key" type="text" placeholder="/home/mediamanager/.ssh/id_rsa">
-            <span class="form-hint">Laisser vide pour utiliser la clé par défaut (~/.ssh/id_rsa)</span>
-          </div>
-          <div class="form-group form-full">
-            <label class="form-label">Options de montage</label>
-            <input id="f-options" type="text" value="reconnect,ServerAliveInterval=15,uid=1000,gid=1000">
-          </div>
-        </div>`
     }
   };
 
@@ -160,6 +126,19 @@ const Mounts = (() => {
       categories = [...new Set(allMounts.map(m => m.category).filter(Boolean))];
     }
     renderCategoryFilters();
+    renderCategorySelect();   // ← remplit aussi le <select> de la popup
+  }
+
+  // Remplit le <select id="f-cat-select"> dans la popup avec les catégories connues
+  function renderCategorySelect() {
+    const sel = document.getElementById('f-cat-select');
+    if (!sel) return;
+    const current = sel.value;   // conserver la sélection en cours si déjà ouverte
+    sel.innerHTML = '<option value="">— Choisir —</option>'
+      + categories.map(c =>
+          `<option value="${esc2(c)}">${esc2(c)}</option>`
+        ).join('');
+    if (current) sel.value = current;
   }
 
   /* ── Stats ────────────────────────────────────────────────────────────── */
@@ -249,7 +228,7 @@ const Mounts = (() => {
   function resetForm() {
     selectedType = null;
     document.getElementById('f-active').checked = true;
-    document.getElementById('f-category').value = '';
+    document.getElementById('f-cat-select').value = '';
     document.getElementById('f-newcat').value   = '';
     document.getElementById('type-fields').innerHTML = '';
     document.getElementById('type-fields').classList.remove('show');
@@ -276,7 +255,7 @@ const Mounts = (() => {
     setVal('f-options',     m.mount_options ?? '');
     setVal('f-smb-version', m.smb_version ?? '3.0');
     setVal('f-nfs-version', m.nfs_version ?? '4');
-    setVal('f-category',    m.category    ?? '');
+    setVal('f-cat-select',  m.category    ?? '');
     const act = document.getElementById('f-active');
     if (act) act.checked = m.active !== false;
   }
@@ -312,12 +291,6 @@ const Mounts = (() => {
     if (selectedType === 'nfs') {
       return { ...base, server, share, mount_options: options,
         nfs_version: getVal('f-nfs-version') || '4' };
-    }
-    if (selectedType === 'sshfs') {
-      return { ...base, server, share, mount_options: options,
-        smb_user:    getVal('f-user'),
-        ssh_port:    getVal('f-ssh-port') || '22',
-        ssh_key:     getVal('f-ssh-key') };
     }
     return base;
   }

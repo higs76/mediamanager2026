@@ -123,7 +123,8 @@ create_user() {
         log_warn "User mediamanager already exists"
     else
         useradd -m -s /bin/bash mediamanager
-        log_success "User mediamanager created"
+        echo "mediamanager:mediamanager" | chpasswd
+        log_success "User mediamanager created (password: mediamanager)"
     fi
 
     # Droits sudo limités : uniquement mount/umount (montages SMB)
@@ -134,6 +135,17 @@ mediamanager ALL=(ALL) NOPASSWD: /bin/mount, /bin/umount, /usr/bin/systemctl res
 SUDOEOF
     chmod 440 /etc/sudoers.d/mediamanager
     log_success "Sudoers configured (mount/umount/restart only)"
+
+    # Activer l'authentification SSH par mot de passe.
+    # Ubuntu 24.04 la désactive par défaut, ce qui empêche de se connecter
+    # en SSH avec user/password depuis VSCode ou un terminal.
+    if grep -q "^PasswordAuthentication" /etc/ssh/sshd_config 2>/dev/null; then
+        sed -i 's/^PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+    else
+        echo "PasswordAuthentication yes" >> /etc/ssh/sshd_config
+    fi
+    systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
+    log_success "SSH password authentication enabled"
 
 }
 
