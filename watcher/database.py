@@ -47,7 +47,7 @@ def test_db_connection() -> bool:
     """
     try:
         with engine.connect() as conn:
-            result = conn.execute("SELECT 1")
+            result = conn.execute(text("SELECT 1"))
             logger.info("✓ Connexion BD OK")
             return True
     except Exception as e:

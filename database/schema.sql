@@ -149,4 +149,3 @@ CREATE INDEX IF NOT EXISTS idx_files_mount      ON files(mount_id);
 CREATE INDEX IF NOT EXISTS idx_files_status ON files(status);
 CREATE INDEX IF NOT EXISTS idx_metadata_file ON video_metadata(file_id);
 CREATE INDEX IF NOT EXISTS idx_proposals_file ON rename_proposals(file_id);
-CREATE INDEX IF NOT EXISTS idx_folders_category ON folders_config(category);

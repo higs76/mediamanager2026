@@ -26,6 +26,29 @@ from watcher.config import (
 from watcher.database import test_db_connection
 from watcher.api import router as admin_router
 
+
+def init_database_tables():
+    """
+    Crée les tables si elles n'existent pas encore.
+    Exécute database/schema.sql au démarrage — idempotent grâce à CREATE IF NOT EXISTS.
+    """
+    schema_file = PROJECT_ROOT / 'database' / 'schema.sql'
+    if not schema_file.exists():
+        logger.warning(f"⚠ schema.sql non trouvé : {schema_file}")
+        return
+    try:
+        sql = schema_file.read_text()
+        with engine.connect() as conn:
+            # Exécuter chaque statement séparément
+            for statement in sql.split(';'):
+                s = statement.strip()
+                if s and not s.startswith('--'):
+                    conn.execute(text(s))
+            conn.commit()
+        logger.info("✓ Tables BDD vérifiées / créées")
+    except Exception as e:
+        logger.error(f"✗ Erreur init tables : {e}")
+
 # ==========================================
 # Configuration Logging
 # ==========================================
@@ -369,6 +392,9 @@ if __name__ == "__main__":
     logger.info(f"   Admin: http://{API_HOST}:{API_PORT}/admin")
     logger.info(f"   Debug: {API_DEBUG}")
     logger.info("=" * 60)
+
+    # Initialiser les tables BDD si nécessaire
+    init_database_tables()
     
     try:
         uvicorn.run(

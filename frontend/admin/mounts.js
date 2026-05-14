@@ -1,37 +1,38 @@
 /* =============================================================================
    MediaManager 2026 — mounts.js
-   Gestion de l'onglet "Montages NAS"
+   Onglet "Montages NAS" — browse réseau, options collapse, CRUD complet
    ============================================================================= */
 
 const Mounts = (() => {
 
   /* ── État ─────────────────────────────────────────────────────────────── */
-  let allMounts   = [];   // liste complète depuis l'API
-  let categories  = [];   // catégories depuis la BDD
-  let currentCat  = 'all';
-  let editingId   = null;
-  let deletingId  = null;
+  let allMounts    = [];
+  let categories   = [];
+  let currentCat   = 'all';
+  let editingId    = null;
+  let deletingId   = null;
   let selectedType = null;
 
-  /* ── Types de montage disponibles ─────────────────────────────────────── */
-  // On propose les 3 types pertinents pour un usage NAS/media.
-  // D'autres existent sous Linux (WebDAV, FTP via curlftpfs, bind mount...)
-  // mais ils sont rares dans ce contexte.
+  /* ── Définition des types de montage ──────────────────────────────────── */
   const MOUNT_TYPES = {
     smb: {
-      icon: '🖥️',
-      name: 'SMB / CIFS',
-      desc: 'NAS Synology, QNAP, Windows',
-      fields: `
+      icon: '🖥️', name: 'SMB / CIFS', desc: 'NAS Synology, QNAP, Windows',
+      fields: () => `
         <div class="section-sep">Partage réseau</div>
         <div class="form-grid">
           <div class="form-group">
             <label class="form-label">Serveur <span class="req">*</span></label>
-            <input id="f-server" type="text" placeholder="//192.168.1.10 ou //nas1">
+            <div class="browse-row">
+              <input id="f-server" type="text" placeholder="//192.168.1.10 ou //DS1821"
+                     oninput="Mounts._clearBrowse()">
+              <button type="button" class="btn btn-secondary"
+                      onclick="Mounts._browse('smb')" title="Lister les partages">🔍 Parcourir</button>
+            </div>
+            <div class="browse-results" id="browse-results"></div>
           </div>
           <div class="form-group">
             <label class="form-label">Partage <span class="req">*</span></label>
-            <input id="f-share" type="text" placeholder="/series ou /video">
+            <input id="f-share" type="text" placeholder="/series — ou cliquer Parcourir">
           </div>
         </div>
         <div class="section-sep">Authentification</div>
@@ -59,29 +60,38 @@ const Mounts = (() => {
             </select>
           </div>
         </div>
-        <div class="section-sep">Options avancées</div>
-        <div class="form-group">
-          <label class="form-label">Options de montage</label>
-          <input id="f-options" type="text"
-            value="uid=1000,gid=1000,file_mode=0644,dir_mode=0755,iocharset=utf8">
-          <span class="form-hint">Options CIFS supplémentaires passées à mount -t cifs -o ...</span>
+        <div class="collapsible-toggle" onclick="Mounts._toggleCollapse(this)">
+          <div class="section-sep">Options avancées</div>
+          <span class="collapse-arrow">▼</span>
+        </div>
+        <div class="collapsible-body">
+          <div class="form-group" style="margin-top:.5rem">
+            <label class="form-label">Options de montage</label>
+            <input id="f-options" type="text"
+                   value="uid=1000,gid=1000,file_mode=0644,dir_mode=0755,iocharset=utf8">
+            <span class="form-hint">Options CIFS passées à mount -t cifs -o ...</span>
+          </div>
         </div>`
     },
     nfs: {
-      icon: '🐧',
-      name: 'NFS',
-      desc: 'NAS Linux, Synology NFS',
-      fields: `
+      icon: '🐧', name: 'NFS', desc: 'NAS Linux, Synology NFS',
+      fields: () => `
         <div class="section-sep">Export NFS</div>
         <div class="form-grid">
           <div class="form-group">
             <label class="form-label">Serveur <span class="req">*</span></label>
-            <input id="f-server" type="text" placeholder="192.168.1.10 ou nas1">
-            <span class="form-hint">Sans les // — NFS utilise IP directe</span>
+            <div class="browse-row">
+              <input id="f-server" type="text" placeholder="192.168.1.10 ou nas1"
+                     oninput="Mounts._clearBrowse()">
+              <button type="button" class="btn btn-secondary"
+                      onclick="Mounts._browse('nfs')" title="Lister les exports NFS">🔍 Parcourir</button>
+            </div>
+            <span class="form-hint">Sans // — NFS utilise l'IP directe</span>
+            <div class="browse-results" id="browse-results"></div>
           </div>
           <div class="form-group">
             <label class="form-label">Export <span class="req">*</span></label>
-            <input id="f-share" type="text" placeholder="/volume1/series">
+            <input id="f-share" type="text" placeholder="/volume1/series — ou cliquer Parcourir">
           </div>
           <div class="form-group">
             <label class="form-label">Version NFS</label>
@@ -90,7 +100,13 @@ const Mounts = (() => {
               <option value="3">NFSv3</option>
             </select>
           </div>
-          <div class="form-group">
+        </div>
+        <div class="collapsible-toggle" onclick="Mounts._toggleCollapse(this)">
+          <div class="section-sep">Options avancées</div>
+          <span class="collapse-arrow">▼</span>
+        </div>
+        <div class="collapsible-body">
+          <div class="form-group" style="margin-top:.5rem">
             <label class="form-label">Options de montage</label>
             <input id="f-options" type="text" value="rw,soft,timeo=30">
           </div>
@@ -103,10 +119,11 @@ const Mounts = (() => {
     await Promise.all([loadMounts(), loadCategories()]);
   }
 
-  /* ── Chargement données ───────────────────────────────────────────────── */
+  /* ── Chargement ───────────────────────────────────────────────────────── */
   async function loadMounts() {
     try {
       const r = await fetch(`${API}/api/admin/mounts`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const d = await r.json();
       allMounts = d.mounts ?? [];
       updateStats();
@@ -119,45 +136,43 @@ const Mounts = (() => {
   async function loadCategories() {
     try {
       const r = await fetch(`${API}/api/admin/categories`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const d = await r.json();
       categories = d.categories ?? [];
     } catch (_) {
-      // Fallback si l'endpoint n'existe pas encore
-      categories = [...new Set(allMounts.map(m => m.category).filter(Boolean))];
+      // Fallback : déduire depuis les montages existants
+      categories = [...new Set(allMounts.map(m => m.category_name).filter(Boolean))];
     }
     renderCategoryFilters();
-    renderCategorySelect();   // ← remplit aussi le <select> de la popup
-  }
-
-  // Remplit le <select id="f-cat-select"> dans la popup avec les catégories connues
-  function renderCategorySelect() {
-    const sel = document.getElementById('f-cat-select');
-    if (!sel) return;
-    const current = sel.value;   // conserver la sélection en cours si déjà ouverte
-    sel.innerHTML = '<option value="">— Choisir —</option>'
-      + categories.map(c =>
-          `<option value="${esc2(c)}">${esc2(c)}</option>`
-        ).join('');
-    if (current) sel.value = current;
+    renderCategorySelect();
   }
 
   /* ── Stats ────────────────────────────────────────────────────────────── */
   function updateStats() {
     const mounted = allMounts.filter(m => m.is_mounted).length;
-    setText2('stat-total',   allMounts.length);
-    setText2('stat-mounted', mounted);
-    setText2('stat-missing', allMounts.length - mounted);
+    setText('stat-total',   allMounts.length);
+    setText('stat-mounted', mounted);
+    setText('stat-missing', allMounts.length - mounted);
   }
 
-  /* ── Filtres catégories ───────────────────────────────────────────────── */
+  /* ── Filtres ──────────────────────────────────────────────────────────── */
   function renderCategoryFilters() {
     const container = document.getElementById('cat-filters');
-    const cats = ['all', ...categories];
-    container.innerHTML = cats.map(cat => {
-      const label = cat === 'all' ? 'Tous' : cat.charAt(0).toUpperCase() + cat.slice(1);
+    if (!container) return;
+    container.innerHTML = ['all', ...categories].map(cat => {
+      const label = cat === 'all' ? 'Tous' : cap(cat);
       return `<button class="cat-btn${cat === currentCat ? ' active' : ''}"
-        onclick="Mounts._filterCat(this,'${cat}')">${label}</button>`;
+        onclick="Mounts._filterCat(this,'${esc(cat)}')">${label}</button>`;
     }).join('');
+  }
+
+  function renderCategorySelect() {
+    const sel = document.getElementById('f-cat-select');
+    if (!sel) return;
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">— Choisir —</option>'
+      + categories.map(c => `<option value="${esc(c)}">${cap(c)}</option>`).join('');
+    if (cur) sel.value = cur;
   }
 
   function _filterCat(btn, cat) {
@@ -171,9 +186,11 @@ const Mounts = (() => {
   function renderTable() {
     const filtered = currentCat === 'all'
       ? allMounts
-      : allMounts.filter(m => m.category === currentCat);
+      : allMounts.filter(m => m.category_name === currentCat);
 
     const tbody = document.getElementById('mounts-tbody');
+    if (!tbody) return;
+
     if (!filtered.length) {
       tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state">
         Aucun montage${currentCat !== 'all' ? ' pour cette catégorie' : ''}.
@@ -182,21 +199,24 @@ const Mounts = (() => {
       return;
     }
 
-    tbody.innerHTML = filtered.map(m => `
-      <tr data-id="${m.id}">
-        <td><strong>${m.id} - ${esc2(m.category_name)}</strong></td>
-        <td><span class="badge badge-blue">${esc2(m.category_name)}</span></td>
-        <td><span class="badge badge-muted">${esc2(m.mount_type || 'smb').toUpperCase()}</span></td>
-        <td class="td-server">${esc2(m.server)}${esc2(m.share || m.export_path)}</td>
-        <td class="td-mono" title="${esc2(m.local_path)}">${esc2(m.local_path)}</td>
+    tbody.innerHTML = filtered.map(m => {
+      const label = `${m.id} - ${esc(m.category_name)}`;
+      const source = m.mount_type === 'nfs'
+        ? `${esc(m.server)}${esc(m.export_path)}`
+        : `${esc(m.server)}${esc(m.share)}`;
+      return `<tr data-id="${m.id}">
+        <td><strong>${label}</strong></td>
+        <td><span class="badge badge-blue">${esc(m.category_name)}</span></td>
+        <td><span class="badge badge-muted">${(m.mount_type||'smb').toUpperCase()}</span></td>
+        <td class="td-server">${source}</td>
+        <td class="td-mono" title="${esc(m.local_path)}">${esc(m.local_path)}</td>
         <td>${mountedBadge(m.is_mounted)}</td>
-        <td>
-          <div class="row-actions">
-            <button class="icon-btn" onclick="Mounts._openEdit(${m.id})" title="Modifier">✏</button>
-            <button class="icon-btn danger" onclick="Mounts._openDelete(${m.id})" title="Supprimer">🗑</button>
-          </div>
-        </td>
-      </tr>`).join('');
+        <td><div class="row-actions">
+          <button class="icon-btn" onclick="Mounts._openEdit(${m.id})" title="Modifier">✏</button>
+          <button class="icon-btn danger" onclick="Mounts._openDelete(${m.id})" title="Supprimer">🗑</button>
+        </div></td>
+      </tr>`;
+    }).join('');
   }
 
   function mountedBadge(ok) {
@@ -205,12 +225,13 @@ const Mounts = (() => {
       : '<span class="badge badge-red"><span class="badge-dot"></span>Non monté</span>';
   }
 
-  /* ── Popup Ajout / Édition ────────────────────────────────────────────── */
+  /* ── Popup Ajout ──────────────────────────────────────────────────────── */
   function _openAdd() {
     editingId    = null;
     selectedType = null;
     document.getElementById('modal-mount-title').textContent = 'Ajouter un montage';
     resetForm();
+    renderCategorySelect();
     openOverlay('overlay-mount');
   }
 
@@ -222,14 +243,16 @@ const Mounts = (() => {
     resetForm();
     selectType(m.mount_type || 'smb');
     fillForm(m);
+    renderCategorySelect();
     openOverlay('overlay-mount');
   }
 
   function resetForm() {
     selectedType = null;
-    document.getElementById('f-active').checked = true;
-    document.getElementById('f-cat-select').value = '';
-    document.getElementById('f-newcat').value   = '';
+    const active = document.getElementById('f-active');
+    if (active) active.checked = true;
+    setVal('f-cat-select', '');
+    setVal('f-newcat', '');
     document.getElementById('type-fields').innerHTML = '';
     document.getElementById('type-fields').classList.remove('show');
     document.querySelectorAll('.type-card').forEach(c => c.classList.remove('selected'));
@@ -237,53 +260,51 @@ const Mounts = (() => {
 
   function selectType(type) {
     selectedType = type;
-    document.querySelectorAll('.type-card').forEach(c => {
-      c.classList.toggle('selected', c.dataset.type === type);
-    });
+    document.querySelectorAll('.type-card').forEach(c =>
+      c.classList.toggle('selected', c.dataset.type === type)
+    );
     const def = MOUNT_TYPES[type];
     if (!def) return;
     const section = document.getElementById('type-fields');
-    section.innerHTML = def.fields;
+    section.innerHTML = def.fields();
     section.classList.add('show');
   }
 
   function fillForm(m) {
-    setVal('f-server',      m.server      ?? '');
-    // SMB : le partage s'appelle "share", NFS : "export_path"
-    setVal('f-share',       m.share         ?? m.export_path ?? '');
-    setVal('f-user',        m.smb_user    ?? '');
-    setVal('f-domain',      m.smb_domain  ?? 'WORKGROUP');    
-    setVal('f-smb-version', m.smb_version ?? '3.0');
-    setVal('f-nfs-version', m.nfs_version ?? '4');
-    // Options : smb_options ou nfs_options selon le type
+    setVal('f-server',      m.server          ?? '');
+    setVal('f-share',       m.share           ?? m.export_path ?? '');
+    setVal('f-user',        m.username        ?? '');
+    setVal('f-domain',      m.domain          ?? 'WORKGROUP');
+    setVal('f-smb-version', m.smb_version     ?? '3.0');
+    setVal('f-nfs-version', String(m.nfs_version ?? 4));
     setVal('f-options',
       m.mount_type === 'nfs' ? (m.nfs_options ?? '') : (m.smb_options ?? ''));
-    setVal('f-cat-select',  m.category_name ?? '');   // API retourne "category_name"
+    setVal('f-cat-select',  m.category_name   ?? '');
     const act = document.getElementById('f-active');
     if (act) act.checked = m.active !== false;
   }
 
-
   /* ── Browse réseau ────────────────────────────────────────────────────── */
   async function _browse(type) {
-    const server = getVal('f-server').trim();
+    const server = (getVal('f-server') || '').trim();
     if (!server) { alert('Saisir d\'abord l\'adresse du serveur'); return; }
- 
+
     const box = document.getElementById('browse-results');
+    if (!box) return;
     box.className = 'browse-results show';
     box.innerHTML = '<div class="browse-empty"><span class="spinner"></span> Recherche…</div>';
- 
-    const username = getVal('f-user') || null;
-    const password = getVal('f-password') || null;
+
+    const user = getVal('f-user') || null;
+    const pwd  = getVal('f-password') || null;
     let url = `${API}/api/admin/mounts/browse?type=${type}&server=${encodeURIComponent(server)}`;
-    if (username) url += `&username=${encodeURIComponent(username)}`;
-    if (password) url += `&password=${encodeURIComponent(password)}`;
- 
+    if (user) url += `&username=${encodeURIComponent(user)}`;
+    if (pwd)  url += `&password=${encodeURIComponent(pwd)}`;
+
     try {
       const r = await fetch(url);
       const d = await r.json();
       if (d.error && !d.shares?.length) {
-        box.innerHTML = `<div class="browse-error">⚠ ${esc2(d.error)}</div>`;
+        box.innerHTML = `<div class="browse-error">⚠ ${esc(d.error)}</div>`;
         return;
       }
       if (!d.shares?.length) {
@@ -291,23 +312,23 @@ const Mounts = (() => {
         return;
       }
       box.innerHTML = d.shares.map(s =>
-        `<div class="browse-item" onclick="Mounts._pickShare('${esc2(s)}')">${esc2(s)}</div>`
+        `<div class="browse-item" onclick="Mounts._pickShare('${esc(s)}')">${esc(s)}</div>`
       ).join('');
     } catch (e) {
-      box.innerHTML = `<div class="browse-error">Erreur : ${esc2(e.message)}</div>`;
+      box.innerHTML = `<div class="browse-error">Erreur : ${esc(e.message)}</div>`;
     }
   }
- 
+
   function _pickShare(share) {
     setVal('f-share', share);
     _clearBrowse();
   }
- 
+
   function _clearBrowse() {
     const box = document.getElementById('browse-results');
     if (box) { box.className = 'browse-results'; box.innerHTML = ''; }
   }
- 
+
   /* ── Collapse options avancées ────────────────────────────────────────── */
   function _toggleCollapse(toggleEl) {
     toggleEl.classList.toggle('open');
@@ -315,30 +336,27 @@ const Mounts = (() => {
     if (body) body.classList.toggle('open');
   }
 
-  /* ── Payload ──────────────────────────────────────────────────────────── */
+  /* ── Payload & save ───────────────────────────────────────────────────── */
   function buildPayload() {
-    const catSelect = document.getElementById('f-cat-select')?.value;
-    const newCat    = document.getElementById('f-newcat')?.value.trim();
-    // Priorité : sélection dans dropdown, sinon nouvelle catégorie saisie
-    const categoryName = catSelect || newCat;
- 
-    const server  = getVal('f-server').trim();
-    const share   = getVal('f-share').trim();
+    const catSelect = document.getElementById('f-cat-select')?.value || '';
+    const newCat    = (document.getElementById('f-newcat')?.value || '').trim();
+    const categoryName = newCat || catSelect;
+
+    const server  = (getVal('f-server') || '').trim();
+    const share   = (getVal('f-share')  || '').trim();
     const options = getVal('f-options');
- 
-    if (!selectedType) { alert('Choisir un type de montage'); return null; }
-    if (!server)        { alert('L\'adresse du serveur est requise'); return null; }
-    if (!share)         { alert('Le partage/export est requis'); return null; }
-    if (!categoryName)  { alert('Choisir ou créer une catégorie'); return null; }
- 
-    // Résoudre l'id de catégorie depuis le nom
-    // Si nouvelle catégorie, on l'envoie au serveur qui la crée avant le montage
+
+    if (!selectedType)   { alert('Choisir un type de montage'); return null; }
+    if (!server)         { alert('L\'adresse du serveur est requise'); return null; }
+    if (!share)          { alert('Le partage / export est requis'); return null; }
+    if (!categoryName)   { alert('Choisir ou créer une catégorie'); return null; }
+
     const base = {
-      mount_type:   selectedType,
-      category_name: categoryName,   // l'API résoudra l'id
+      mount_type:    selectedType,
+      category_name: categoryName,
       active: document.getElementById('f-active')?.checked ?? true,
     };
- 
+
     if (selectedType === 'smb') {
       return { ...base, server, share,
         smb_options: options,
@@ -347,30 +365,16 @@ const Mounts = (() => {
         domain:      getVal('f-domain')      || 'WORKGROUP',
         smb_version: getVal('f-smb-version') || '3.0' };
     }
-    if (selectedType === 'nfs') {
-      return { ...base, server,
-        export_path:  share,
-        nfs_options:  options,
-        nfs_version:  parseInt(getVal('f-nfs-version') || '4') };
-    }
-    return base;
+    // nfs
+    return { ...base, server,
+      export_path: share,
+      nfs_options: options,
+      nfs_version: parseInt(getVal('f-nfs-version') || '4') };
   }
 
   async function saveMount() {
     const payload = buildPayload();
     if (!payload) return;
-
-    // Ajouter la nouvelle catégorie en BDD si saisie
-    const newCat = document.getElementById('f-newcat')?.value.trim();
-    if (newCat && !categories.includes(newCat)) {
-      try {
-        await fetch(`${API}/api/admin/categories`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: newCat })
-        });
-      } catch (_) {}
-    }
 
     const btn = document.getElementById('btn-save-mount');
     btn.disabled = true;
@@ -380,17 +384,20 @@ const Mounts = (() => {
       const url    = editingId ? `${API}/api/admin/mounts/${editingId}` : `${API}/api/admin/mounts`;
       const method = editingId ? 'PUT' : 'POST';
       const r = await fetch(url, {
-        method, headers: { 'Content-Type': 'application/json' },
+        method,
+        headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(payload)
       });
-      if (!r.ok) throw new Error(await r.text());
-
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({detail: r.statusText}));
+        throw new Error(JSON.stringify(err.detail ?? err));
+      }
       closeOverlay('overlay-mount');
       await loadMounts();
       await loadCategories();
       showBanner('warn',
         '⚠ Modifications non appliquées',
-        'Cliquez sur « Appliquer & Synchro » pour monter/démonter les partages.');
+        'Cliquer sur « Appliquer & Synchro » pour monter / démonter les partages.');
     } catch (e) {
       alert('Erreur : ' + e.message);
     } finally {
@@ -405,7 +412,7 @@ const Mounts = (() => {
     if (!m) return;
     deletingId = id;
     document.getElementById('confirm-detail').textContent =
-      `${m.id} - ${m.category_name} (${m.server}${m.share || m.export_path || ''})`;
+      `${m.id} - ${m.category_name}  (${m.server}${m.share || m.export_path || ''})`;
     openOverlay('overlay-confirm');
   }
 
@@ -414,48 +421,44 @@ const Mounts = (() => {
     const btn = document.getElementById('btn-confirm-delete');
     btn.disabled = true;
     try {
-      const r = await fetch(`${API}/api/admin/mounts/${deletingId}`, { method: 'DELETE' });
+      const r = await fetch(`${API}/api/admin/mounts/${deletingId}`, {method: 'DELETE'});
       if (!r.ok && r.status !== 204) throw new Error(await r.text());
       closeOverlay('overlay-confirm');
+      deletingId = null;
       await loadMounts();
-      showBanner('warn',
-        '⚠ Suppression non appliquée',
-        'Cliquez sur « Appliquer & Synchro » pour démonter le partage.');
+      showBanner('warn', '⚠ Suppression non appliquée',
+        'Cliquer sur « Appliquer & Synchro » pour démonter le partage.');
     } catch (e) {
       alert('Erreur : ' + e.message);
     } finally {
       btn.disabled = false;
-      deletingId = null;
     }
   }
 
   /* ── Sync ─────────────────────────────────────────────────────────────── */
-  async function syncMounts() {
+  async function sync() {
     const btn = document.getElementById('btn-sync');
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner"></span> Synchronisation…';
     try {
-      const r = await fetch(`${API}/api/admin/mounts/sync`, { method: 'POST' });
+      const r = await fetch(`${API}/api/admin/mounts/sync`, {method: 'POST'});
       const d = await r.json();
-      showBanner(
-        d.success ? 'ok' : 'error',
+      showBanner(d.success ? 'ok' : 'error',
         d.success ? '✓ Synchronisation réussie' : '⚠ Synchronisation avec erreurs',
-        d.summary ?? ''
-      );
+        d.summary ?? '');
       await loadMounts();
     } catch (e) {
-      showBanner('error', '✗ Erreur', e.message);
+      showBanner('error', '✗ Erreur sync', e.message);
     } finally {
       btn.disabled = false;
       btn.innerHTML = '⚡ Appliquer & Synchro';
     }
   }
 
-  async function refreshStatus() {
+  async function refresh() {
     try {
       const r = await fetch(`${API}/api/admin/mounts/status`);
       const d = await r.json();
-      // Mettre à jour le badge is_mounted de chaque ligne sans tout recharger
       for (const s of d.mounts ?? []) {
         const cell = document.querySelector(`tr[data-id="${s.id}"] td:nth-child(6)`);
         if (cell) cell.innerHTML = mountedBadge(s.is_mounted);
@@ -466,26 +469,26 @@ const Mounts = (() => {
     }
   }
 
-  /* ── Bannière sync ────────────────────────────────────────────────────── */
+  /* ── Bannière ─────────────────────────────────────────────────────────── */
   function showBanner(type, title, detail) {
     const el = document.getElementById('sync-banner');
+    if (!el) return;
     el.className = `sync-banner show ${type === 'ok' ? 'ok' : type === 'error' ? 'err' : 'warn'}`;
-    el.innerHTML = `
-      <div class="sync-banner-text">
-        <strong>${title}</strong>
-        ${detail ? `<span>${detail}</span>` : ''}
-      </div>`;
+    el.innerHTML = `<div class="sync-banner-text">
+      <strong>${title}</strong>${detail ? `<span>${esc(detail)}</span>` : ''}
+    </div>`;
   }
 
   /* ── Overlays ─────────────────────────────────────────────────────────── */
-  function openOverlay(id)  { document.getElementById(id).classList.add('show'); }
-  function closeOverlay(id) { document.getElementById(id).classList.remove('show'); }
+  function openOverlay(id)  { document.getElementById(id)?.classList.add('show'); }
+  function closeOverlay(id) { document.getElementById(id)?.classList.remove('show'); }
 
   /* ── Helpers ──────────────────────────────────────────────────────────── */
-  function setText2(id, v) { const el = document.getElementById(id); if (el) el.textContent = v; }
-  function getVal(id)  { return document.getElementById(id)?.value ?? ''; }
-  function setVal(id, v) { const el = document.getElementById(id); if (el) el.value = v; }
-  function esc2(s) {
+  function setText(id, v) { const el = document.getElementById(id); if (el) el.textContent = v; }
+  function getVal(id)     { return document.getElementById(id)?.value ?? ''; }
+  function setVal(id, v)  { const el = document.getElementById(id); if (el) el.value = v; }
+  function cap(s)         { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
+  function esc(s) {
     return String(s ?? '')
       .replace(/&/g,'&amp;').replace(/</g,'&lt;')
       .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -493,19 +496,14 @@ const Mounts = (() => {
 
   /* ── API publique ─────────────────────────────────────────────────────── */
   return {
-    init,
-    // exposé pour les onclick HTML
-    _filterCat,
-    _openAdd,
-    _openEdit,
-    _openDelete,
+    init, sync, refresh,
+    _filterCat, _openAdd, _openEdit, _openDelete,
+    _browse, _clearBrowse, _pickShare,
+    _toggleCollapse,
     selectType: (t) => selectType(t),
-    save:       saveMount,
+    save:          saveMount,
     confirmDelete,
-    sync:        syncMounts,
-    refresh:     refreshStatus,
-    closeMount:  () => closeOverlay('overlay-mount'),
-    closeConfirm:() => closeOverlay('overlay-confirm'),
-    MOUNT_TYPES,
+    closeMount:    () => closeOverlay('overlay-mount'),
+    closeConfirm:  () => closeOverlay('overlay-confirm'),
   };
 })();
