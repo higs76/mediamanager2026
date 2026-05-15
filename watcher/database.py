@@ -3,7 +3,7 @@ Gestion de la connexion à la base de données PostgreSQL
 """
 
 import logging
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import NullPool
 

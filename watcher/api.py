@@ -5,6 +5,7 @@ Toutes les routes /api/admin/...
 
 import logging
 import subprocess
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
@@ -26,48 +27,124 @@ class CategoryCreate(BaseModel):
     name: str
 
 class MountCreate(BaseModel):
-    mount_type: str           # "smb" ou "nfs"
-    category_id: int
-    active: bool = True
+    mount_type:    str            # "smb" ou "nfs"
+    category_name: str            # nom — l'API résout ou crée la catégorie
+    active:        bool = True
+    # Commun
+    server:        Optional[str] = None
     # SMB
-    server: Optional[str] = None
-    share: Optional[str] = None
-    username: Optional[str] = None
-    password: Optional[str] = None
-    domain: str = "WORKGROUP"
-    smb_version: str = "3.0"
-    smb_options: str = "uid=1000,gid=1000,file_mode=0644,dir_mode=0755,iocharset=utf8"
+    share:         Optional[str] = None
+    username:      Optional[str] = None
+    password:      Optional[str] = None
+    domain:        str = "WORKGROUP"
+    smb_version:   str = "3.0"
+    smb_options:   str = "uid=1000,gid=1000,file_mode=0644,dir_mode=0755,iocharset=utf8"
     # NFS
-    export_path: Optional[str] = None
-    nfs_version: int = 4
-    nfs_options: str = "rw,soft,timeo=30"
+    export_path:   Optional[str] = None
+    nfs_version:   int = 4
+    nfs_options:   str = "rw,soft,timeo=30"
 
 class MountUpdate(BaseModel):
-    active: Optional[bool] = None
-    server: Optional[str] = None
-    share: Optional[str] = None
-    username: Optional[str] = None
-    password: Optional[str] = None
-    domain: Optional[str] = None
-    smb_version: Optional[str] = None
-    smb_options: Optional[str] = None
-    export_path: Optional[str] = None
-    nfs_version: Optional[int] = None
-    nfs_options: Optional[str] = None
+    active:        Optional[bool] = None
+    server:        Optional[str]  = None
+    share:         Optional[str]  = None
+    username:      Optional[str]  = None
+    password:      Optional[str]  = None
+    domain:        Optional[str]  = None
+    smb_version:   Optional[str]  = None
+    smb_options:   Optional[str]  = None
+    export_path:   Optional[str]  = None
+    nfs_version:   Optional[int]  = None
+    nfs_options:   Optional[str]  = None
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _build_local_path(mount_id: int, category_name: str) -> str:
+    """
+    Règle de nommage : {MOUNT_BASE}/{category}/{id}-{category}
+    Ex : /home/mediamanager/MediaManagerMnt/series/1-series
+    """
+    return str(Path(MOUNT_BASE_PATH) / category_name / f"{mount_id}-{category_name}")
+
+
+def _is_mounted(local_path: str) -> bool:
+    """Vérifie si un chemin est monté via /proc/mounts."""
+    try:
+        with open("/proc/mounts") as f:
+            return any(local_path == line.split()[1]
+                       for line in f if len(line.split()) >= 2)
+    except Exception:
+        return False
+
+
+def _get_mount_full(conn, mount_id: int) -> Optional[dict]:
+    """Retourne un montage complet (header + détails type) ou None."""
+    row = conn.execute(text("""
+        SELECT m.id, m.mount_type, m.category_id, c.name AS category_name,
+               m.local_path, m.active, m.last_mount_at, m.last_error,
+               m.created_at, m.updated_at
+        FROM mounts m
+        JOIN categories c ON c.id = m.category_id
+        WHERE m.id = :id
+    """), {"id": mount_id}).fetchone()
+
+    if not row:
+        return None
+
+    result = {
+        "id":            row[0],
+        "mount_type":    row[1],
+        "category_id":   row[2],
+        "category_name": row[3],
+        "local_path":    row[4],
+        "active":        row[5],
+        "last_mount_at": str(row[6]) if row[6] else None,
+        "last_error":    row[7],
+        "created_at":    str(row[8]),
+        "updated_at":    str(row[9]),
+        "is_mounted":    _is_mounted(row[4]),
+    }
+
+    if row[1] == "smb":
+        smb = conn.execute(text("""
+            SELECT server, share, username, domain, smb_version, mount_options
+            FROM mount_smb WHERE mount_id = :id
+        """), {"id": mount_id}).fetchone()
+        if smb:
+            result.update({
+                "server": smb[0], "share": smb[1],
+                "username": smb[2], "domain": smb[3],
+                "smb_version": smb[4], "smb_options": smb[5],
+            })
+    elif row[1] == "nfs":
+        nfs = conn.execute(text("""
+            SELECT server, export_path, nfs_version, mount_options
+            FROM mount_nfs WHERE mount_id = :id
+        """), {"id": mount_id}).fetchone()
+        if nfs:
+            result.update({
+                "server": nfs[0], "export_path": nfs[1],
+                "nfs_version": nfs[2], "nfs_options": nfs[3],
+            })
+
+    return result
 
 
 # ── Catégories ────────────────────────────────────────────────────────────────
 
 @router.get("/categories")
 def list_categories():
-    """Retourne toutes les catégories."""
     try:
         with engine.connect() as conn:
             rows = conn.execute(text(
-                "SELECT id, name, created_at FROM categories ORDER BY name"
+                "SELECT id, name FROM categories ORDER BY name"
             )).fetchall()
-        cats = [{"id": r[0], "name": r[1], "created_at": str(r[2])} for r in rows]
-        return JSONResponse({"categories": [c["name"] for c in cats], "detail": cats})
+        cats = [{"id": r[0], "name": r[1]} for r in rows]
+        return JSONResponse({
+            "categories": [c["name"] for c in cats],
+            "detail":     cats
+        })
     except Exception as e:
         logger.error(f"list_categories: {e}")
         raise HTTPException(500, str(e))
@@ -75,7 +152,6 @@ def list_categories():
 
 @router.post("/categories", status_code=201)
 def create_category(payload: CategoryCreate):
-    """Crée une nouvelle catégorie."""
     name = payload.name.strip().lower()
     if not name:
         raise HTTPException(400, "Le nom ne peut pas être vide")
@@ -101,83 +177,13 @@ def create_category(payload: CategoryCreate):
 
 # ── Montages ──────────────────────────────────────────────────────────────────
 
-def _build_local_path(mount_id: int, category_name: str) -> str:
-    """
-    Construit le chemin local du point de montage.
-    Règle : {MOUNT_BASE}/{category}/{id}-{category}
-    Exemple : /home/mediamanager/MediaManagerMnt/series/1-series
-    """
-    return str(MOUNT_BASE_PATH / category_name / f"{mount_id}-{category_name}")
-
-
-def _get_mount_full(conn, mount_id: int) -> Optional[dict]:
-    """Retourne un montage complet (header + détails type) ou None."""
-    row = conn.execute(text("""
-        SELECT m.id, m.mount_type, m.category_id, c.name AS category_name,
-               m.local_path, m.active, m.last_mount_at, m.last_error,
-               m.created_at, m.updated_at
-        FROM mounts m
-        JOIN categories c ON c.id = m.category_id
-        WHERE m.id = :id
-    """), {"id": mount_id}).fetchone()
-
-    if not row:
-        return None
-
-    result = {
-        "id": row[0], "mount_type": row[1],
-        "category_id": row[2], "category_name": row[3],
-        "local_path": row[4], "active": row[5],
-        "last_mount_at": str(row[6]) if row[6] else None,
-        "last_error": row[7],
-        "created_at": str(row[8]), "updated_at": str(row[9]),
-    }
-
-    if row[1] == "smb":
-        smb = conn.execute(text("""
-            SELECT server, share, username, domain, smb_version, mount_options
-            FROM mount_smb WHERE mount_id = :id
-        """), {"id": mount_id}).fetchone()
-        if smb:
-            result.update({
-                "server": smb[0], "share": smb[1],
-                "username": smb[2], "domain": smb[3],
-                "smb_version": smb[4], "smb_options": smb[5],
-            })
-    elif row[1] == "nfs":
-        nfs = conn.execute(text("""
-            SELECT server, export_path, nfs_version, mount_options
-            FROM mount_nfs WHERE mount_id = :id
-        """), {"id": mount_id}).fetchone()
-        if nfs:
-            result.update({
-                "server": nfs[0], "export_path": nfs[1],
-                "nfs_version": nfs[2], "nfs_options": nfs[3],
-            })
-
-    # Vérifier si actuellement monté (/proc/mounts)
-    result["is_mounted"] = _is_mounted(row[4])
-    return result
-
-
-def _is_mounted(local_path: str) -> bool:
-    """Vérifie si un chemin est monté via /proc/mounts."""
-    try:
-        with open("/proc/mounts") as f:
-            return any(local_path == line.split()[1]
-                       for line in f if len(line.split()) >= 2)
-    except Exception:
-        return False
-
-
 @router.get("/mounts")
 def list_mounts():
-    """Liste tous les montages avec leur statut OS."""
     try:
         with engine.connect() as conn:
-            rows = conn.execute(text("""
-                SELECT m.id FROM mounts m ORDER BY m.category_id, m.id
-            """)).fetchall()
+            rows = conn.execute(text(
+                "SELECT id FROM mounts ORDER BY category_id, id"
+            )).fetchall()
             mounts = [_get_mount_full(conn, r[0]) for r in rows]
         return JSONResponse({"mounts": mounts, "count": len(mounts)})
     except Exception as e:
@@ -187,7 +193,6 @@ def list_mounts():
 
 @router.get("/mounts/status")
 def mounts_status():
-    """Vue rapide : montés vs attendus."""
     try:
         with engine.connect() as conn:
             rows = conn.execute(text("""
@@ -195,8 +200,8 @@ def mounts_status():
                 FROM mounts m JOIN categories c ON c.id = m.category_id
                 WHERE m.active = true
             """)).fetchall()
-        status = [{"id": r[0], "local_path": r[1], "category": r[2],
-                   "is_mounted": _is_mounted(r[1])} for r in rows]
+        status  = [{"id": r[0], "local_path": r[1], "category": r[2],
+                    "is_mounted": _is_mounted(r[1])} for r in rows]
         mounted = sum(1 for s in status if s["is_mounted"])
         return JSONResponse({
             "total": len(status), "mounted": mounted,
@@ -208,17 +213,17 @@ def mounts_status():
 
 @router.post("/mounts", status_code=201)
 def create_mount(payload: MountCreate):
-    """Crée un montage en BDD (ne monte pas encore)."""
+    """Crée un montage en BDD. Utiliser /sync ensuite pour monter."""
     if payload.mount_type not in ("smb", "nfs"):
         raise HTTPException(400, "mount_type doit être 'smb' ou 'nfs'")
-    
+
     cat_name = payload.category_name.strip().lower()
     if not cat_name:
         raise HTTPException(400, "category_name ne peut pas être vide")
 
     try:
         with engine.connect() as conn:
-# Résoudre la catégorie par nom — la créer si elle n'existe pas encore
+            # Résoudre la catégorie — la créer si elle n'existe pas
             cat = conn.execute(
                 text("SELECT id, name FROM categories WHERE name = :n"),
                 {"n": cat_name}
@@ -229,11 +234,11 @@ def create_mount(payload: MountCreate):
                     {"n": cat_name}
                 ).fetchone()
                 logger.info(f"Catégorie créée automatiquement : {cat_name}")
- 
+
             category_id   = cat[0]
             category_name = cat[1]
 
-            # Créer le header mounts avec local_path provisoire
+            # Header mounts (local_path provisoire, mis à jour juste après)
             row = conn.execute(text("""
                 INSERT INTO mounts (mount_type, category_id, local_path, active)
                 VALUES (:type, :cat, '', :active)
@@ -242,19 +247,19 @@ def create_mount(payload: MountCreate):
                    "active": payload.active}).fetchone()
             mount_id = row[0]
 
-            # Calculer et mettre à jour local_path maintenant qu'on a l'id
             local_path = _build_local_path(mount_id, category_name)
-            conn.execute(text(
-                "UPDATE mounts SET local_path = :p WHERE id = :id"
-            ), {"p": local_path, "id": mount_id})
+            conn.execute(
+                text("UPDATE mounts SET local_path = :p WHERE id = :id"),
+                {"p": local_path, "id": mount_id}
+            )
 
-            # Créer le détail selon le type
             if payload.mount_type == "smb":
                 if not payload.server or not payload.share:
                     raise HTTPException(400, "server et share sont requis pour SMB")
                 conn.execute(text("""
                     INSERT INTO mount_smb
-                        (mount_id, server, share, username, password, domain, smb_version, mount_options)
+                        (mount_id, server, share, username, password,
+                         domain, smb_version, mount_options)
                     VALUES (:mid, :srv, :shr, :usr, :pwd, :dom, :ver, :opt)
                 """), {"mid": mount_id, "srv": payload.server, "shr": payload.share,
                        "usr": payload.username, "pwd": payload.password,
@@ -267,7 +272,8 @@ def create_mount(payload: MountCreate):
                     INSERT INTO mount_nfs
                         (mount_id, server, export_path, nfs_version, mount_options)
                     VALUES (:mid, :srv, :exp, :ver, :opt)
-                """), {"mid": mount_id, "srv": payload.server, "exp": payload.export_path,
+                """), {"mid": mount_id, "srv": payload.server,
+                       "exp": payload.export_path,
                        "ver": payload.nfs_version, "opt": payload.nfs_options})
 
             conn.commit()
@@ -282,7 +288,6 @@ def create_mount(payload: MountCreate):
 
 @router.put("/mounts/{mount_id}")
 def update_mount(mount_id: int, payload: MountUpdate):
-    """Met à jour un montage."""
     try:
         with engine.connect() as conn:
             mount = conn.execute(
@@ -337,7 +342,6 @@ def update_mount(mount_id: int, payload: MountUpdate):
 
 @router.delete("/mounts/{mount_id}", status_code=204)
 def delete_mount(mount_id: int):
-    """Supprime un montage de la BDD (le démontage est fait par /sync)."""
     try:
         with engine.connect() as conn:
             result = conn.execute(
@@ -354,7 +358,7 @@ def delete_mount(mount_id: int):
 
 # ── Synchronisation ───────────────────────────────────────────────────────────
 
-def _do_mount(local_path: str, mount_type: str, params: dict) -> tuple[bool, str]:
+def _do_mount(local_path: str, mount_type: str, params: dict) -> tuple:
     """Exécute mount. Retourne (succès, message_erreur)."""
     import os
     os.makedirs(local_path, exist_ok=True)
@@ -386,8 +390,7 @@ def _do_mount(local_path: str, mount_type: str, params: dict) -> tuple[bool, str
         return False, str(e)
 
 
-def _do_umount(local_path: str) -> tuple[bool, str]:
-    """Exécute umount -l."""
+def _do_umount(local_path: str) -> tuple:
     try:
         r = subprocess.run(
             ["sudo", "umount", "-l", local_path],
@@ -400,13 +403,9 @@ def _do_umount(local_path: str) -> tuple[bool, str]:
 
 @router.post("/mounts/sync")
 def sync_mounts():
-    """
-    Synchronise BDD ↔ OS.
-    Ordre : démonter d'abord (gère les renommages), puis monter.
-    """
+    """Synchronise BDD ↔ OS. Supprime d'abord, monte ensuite."""
     try:
         with engine.connect() as conn:
-            # État souhaité (BDD, active=True)
             desired_rows = conn.execute(text("""
                 SELECT m.id, m.mount_type, m.local_path,
                        s.server, s.share, s.username, s.password,
@@ -421,7 +420,6 @@ def sync_mounts():
 
         desired_paths = {r[2] for r in desired_rows}
 
-        # État actuel (OS)
         active_paths = set()
         try:
             with open("/proc/mounts") as f:
@@ -437,7 +435,7 @@ def sync_mounts():
         report    = {"removed": [], "added": [], "errors": [],
                      "already_mounted": list(active_paths & desired_paths)}
 
-        # 1. Démonter d'abord
+        # 1. Démonter d'abord (gère les renommages)
         for path in to_remove:
             ok, err = _do_umount(path)
             (report["removed"] if ok else report["errors"]).append(
@@ -463,15 +461,14 @@ def sync_mounts():
                         "UPDATE mounts SET last_mount_at=NOW(), last_error=NULL WHERE id=:id"
                     ), {"id": mount_id})
                 else:
-                    report["errors"].append({"path": local_path, "action": "mount", "error": err})
+                    report["errors"].append({"path": local_path, "error": err})
                     conn.execute(text(
                         "UPDATE mounts SET last_error=:e WHERE id=:id"
                     ), {"e": err, "id": mount_id})
             conn.commit()
 
-        success = len(report["errors"]) == 0
         return JSONResponse({
-            "success": success,
+            "success": len(report["errors"]) == 0,
             "summary": (f"+{len(report['added'])} montés, "
                         f"-{len(report['removed'])} démontés, "
                         f"{len(report['already_mounted'])} déjà actifs, "
@@ -493,39 +490,27 @@ def browse_network(
     password: Optional[str] = None
 ):
     """
-    Liste les partages disponibles sur un serveur.
-
-    SMB  → exécute : smbclient -N -L //server  (ou avec credentials)
-    NFS  → exécute : showmount -e server
-
-    Retourne {"shares": ["share1", "share2", ...]}
+    Liste les partages/exports disponibles sur un serveur.
+    SMB  → smbclient -N -L //server
+    NFS  → showmount -e server
     """
     if type not in ("smb", "nfs"):
         raise HTTPException(400, "type doit être 'smb' ou 'nfs'")
 
-    # Normaliser l'adresse serveur
-    server_clean = server.lstrip("/")   # retire les // éventuels pour NFS/showmount
-
-    shares = []
-    error  = None
+    server_clean = server.lstrip("/")
+    shares, error = [], None
 
     if type == "smb":
-        # smbclient -L pour lister les partages
         cmd = ["smbclient", "-N", "-L", f"//{server_clean}"]
         if username:
             cmd += ["-U", f"{username}%{password or ''}"]
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
-            # Parser la sortie : on cherche les lignes "  ShareName  Disk  ..."
             for line in r.stdout.splitlines():
                 line = line.strip()
-                if line and not line.startswith("Sharename") and \
-                   not line.startswith("-") and not line.startswith("Server") and \
-                   not line.startswith("Workgroup"):
-                    parts = line.split()
-                    if len(parts) >= 2 and parts[1] in ("Disk", "IPC"):
-                        if parts[1] == "Disk":           # On exclut IPC$, ADMIN$...
-                            shares.append("/" + parts[0])
+                parts = line.split()
+                if len(parts) >= 2 and parts[1] == "Disk":
+                    shares.append("/" + parts[0])
             if r.returncode != 0 and not shares:
                 error = r.stderr.strip() or r.stdout.strip()
         except FileNotFoundError:
@@ -534,15 +519,14 @@ def browse_network(
             error = "Timeout — serveur inaccessible ou pare-feu"
         except Exception as e:
             error = str(e)
-
-    else:  # NFS
+    else:
         cmd = ["showmount", "-e", "--no-headers", server_clean]
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
             for line in r.stdout.splitlines():
                 parts = line.split()
                 if parts:
-                    shares.append(parts[0])  # chemin d'export NFS
+                    shares.append(parts[0])
             if r.returncode != 0 and not shares:
                 error = r.stderr.strip() or r.stdout.strip()
         except FileNotFoundError:
@@ -552,9 +536,4 @@ def browse_network(
         except Exception as e:
             error = str(e)
 
-    return JSONResponse({
-        "server": server,
-        "type": type,
-        "shares": shares,
-        "error": error
-    })
+    return JSONResponse({"server": server, "type": type, "shares": shares, "error": error})

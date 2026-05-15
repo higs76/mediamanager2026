@@ -101,6 +101,8 @@ install_dependencies() {
         postgresql-contrib \
         git \
         cifs-utils \
+        smbclient \
+        nfs-common \
         ffmpeg \
         mediainfo \
         curl \

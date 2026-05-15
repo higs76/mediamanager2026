@@ -23,31 +23,9 @@ from watcher.config import (
     API_HOST, API_PORT, API_DEBUG, PROJECT_ROOT,
     DATABASE_URL, MOUNT_BASE_PATH, LOG_LEVEL, LOG_FILE
 )
-from watcher.database import test_db_connection
+from watcher.database import test_db_connection, engine
 from watcher.api import router as admin_router
-
-
-def init_database_tables():
-    """
-    Crée les tables si elles n'existent pas encore.
-    Exécute database/schema.sql au démarrage — idempotent grâce à CREATE IF NOT EXISTS.
-    """
-    schema_file = PROJECT_ROOT / 'database' / 'schema.sql'
-    if not schema_file.exists():
-        logger.warning(f"⚠ schema.sql non trouvé : {schema_file}")
-        return
-    try:
-        sql = schema_file.read_text()
-        with engine.connect() as conn:
-            # Exécuter chaque statement séparément
-            for statement in sql.split(';'):
-                s = statement.strip()
-                if s and not s.startswith('--'):
-                    conn.execute(text(s))
-            conn.commit()
-        logger.info("✓ Tables BDD vérifiées / créées")
-    except Exception as e:
-        logger.error(f"✗ Erreur init tables : {e}")
+from sqlalchemy import text
 
 # ==========================================
 # Configuration Logging
@@ -94,6 +72,42 @@ app.add_middleware(
 # Router Admin (montages, catégories, browse)
 # ==========================================
 app.include_router(admin_router)
+
+# ==========================================
+# Init BDD au démarrage
+# NOTE : placé ici (niveau module) pour s'exécuter
+# que l'app soit lancée via uvicorn ou __main__.
+# ==========================================
+def init_database_tables():
+    """
+    Crée les tables si elles n'existent pas (idempotent).
+    Exécute database/schema.sql statement par statement.
+    """
+    schema_file = PROJECT_ROOT / 'database' / 'schema.sql'
+    if not schema_file.exists():
+        logger.warning(f"⚠ schema.sql non trouvé : {schema_file}")
+        return
+    try:
+        sql = schema_file.read_text()
+        with engine.connect() as conn:
+            for statement in sql.split(';'):
+                s = statement.strip()
+                if s and not s.startswith('--'):
+                    conn.execute(text(s))
+            conn.commit()
+        logger.info("✓ Tables BDD vérifiées / créées")
+    except Exception as e:
+        logger.error(f"✗ Erreur init tables : {e}")
+
+@app.on_event("startup")
+async def on_startup():
+    """Appelé par uvicorn au démarrage de l'app — init BDD garantie."""
+    logger.info("=" * 60)
+    logger.info(f"🚀 Démarrage MediaManager Watcher v{APP_VERSION}")
+    logger.info(f"   API: http://{API_HOST}:{API_PORT}")
+    logger.info(f"   Admin: http://{API_HOST}:{API_PORT}/admin")
+    logger.info("=" * 60)
+    init_database_tables()
 
 # ==========================================
 # Servir les fichiers statiques (Frontend Admin)
@@ -392,9 +406,6 @@ if __name__ == "__main__":
     logger.info(f"   Admin: http://{API_HOST}:{API_PORT}/admin")
     logger.info(f"   Debug: {API_DEBUG}")
     logger.info("=" * 60)
-
-    # Initialiser les tables BDD si nécessaire
-    init_database_tables()
     
     try:
         uvicorn.run(
