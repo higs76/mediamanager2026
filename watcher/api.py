@@ -146,8 +146,13 @@ def list_categories():
             "detail":     cats
         })
     except Exception as e:
+        err = str(e)
+        # Table absente = BDD pas encore initialisée → retourner vide, pas 500
+        if "does not exist" in err or "UndefinedTable" in err:
+            logger.warning("categories: table absente, init BDD en attente")
+            return JSONResponse({"categories": [], "detail": []})
         logger.error(f"list_categories: {e}")
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, err)
 
 
 @router.post("/categories", status_code=201)
@@ -187,8 +192,13 @@ def list_mounts():
             mounts = [_get_mount_full(conn, r[0]) for r in rows]
         return JSONResponse({"mounts": mounts, "count": len(mounts)})
     except Exception as e:
+        err = str(e)
+        # Table absente = BDD pas encore initialisée → retourner vide, pas 500
+        if "does not exist" in err or "UndefinedTable" in err:
+            logger.warning("mounts: table absente, init BDD en attente")
+            return JSONResponse({"mounts": [], "count": 0})
         logger.error(f"list_mounts: {e}")
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, err)
 
 
 @router.get("/mounts/status")

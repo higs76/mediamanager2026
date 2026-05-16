@@ -119,16 +119,21 @@ def ensure_timezone():
     Configure le fuseau horaire Europe/Paris si le système est en UTC.
     Évite le décalage de 2h dans les logs.
     """
-    import subprocess,os    
+    import subprocess, os
+    # Chemin absolu : le service systemd tourne avec un PATH restreint
+    timedatectl = "/usr/bin/timedatectl"
+    if not os.path.exists(timedatectl):
+        logger.warning("⚠ timedatectl introuvable — timezone non configurée")
+        return
     try:
         result = subprocess.run(
-            ["timedatectl", "show", "--property=Timezone", "--value"],
+            [timedatectl, "show", "--property=Timezone", "--value"],
             capture_output=True, text=True, timeout=5
         )
         current_tz = result.stdout.strip()
         if current_tz != "Europe/Paris":
             subprocess.run(
-                ["timedatectl", "set-timezone", "Europe/Paris"],
+                [timedatectl, "set-timezone", "Europe/Paris"],
                 capture_output=True, timeout=5
             )
             os.environ["TZ"] = "Europe/Paris"
