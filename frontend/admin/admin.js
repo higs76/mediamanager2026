@@ -204,15 +204,75 @@ async function testAPIConn() {
 
 /* ── Update ───────────────────────────────────────────────────────────────── */
 async function triggerUpdate() {
-  if (!confirm('Lancer la mise à jour de MediaManager ?')) return;
+  // Afficher la popup de mise à jour
+  document.getElementById('overlay-update').classList.add('show');
+}
+
+async function startUpdate() {
+  const log = document.getElementById('update-log');
+  const btn  = document.getElementById('btn-start-update');
+  btn.disabled = true;
+  log.innerHTML = '';
+ 
+  function addLine(text, cls = '') {
+    const d = document.createElement('div');
+    d.className = 'log-line' + (cls ? ' ' + cls : '');
+    d.textContent = text;
+    log.appendChild(d);
+    log.scrollTop = log.scrollHeight;
+  }
+ 
+  addLine('→ Récupération des dernières modifications (git pull)…');
+ 
   try {
     const r = await fetch(`${API}/api/admin/update`, { method: 'POST' });
     const d = await r.json();
-    alert(d.message ?? 'Mise à jour lancée');
+ 
+    if (d.results?.git_pull?.output) {
+      addLine(d.results.git_pull.output, d.results.git_pull.success ? 'ok' : 'error');
+    }
+ 
+    if (!d.success) {
+      addLine('✗ Mise à jour échouée.', 'error');
+      btn.disabled = false;
+      return;
+    }
+ 
+    addLine('✓ Code mis à jour.', 'ok');
+    addLine('→ Redémarrage du service…');
+ 
+    // Attendre que le service redémarre puis recharger la page
+    let attempts = 0;
+    const maxAttempts = 20;
+ 
+    const poll = setInterval(async () => {
+      attempts++;
+      try {
+        const health = await fetch(`${API}/health`, { cache: 'no-store' });
+        if (health.ok) {
+          clearInterval(poll);
+          addLine('✓ Service redémarré !', 'ok');
+          addLine('→ Rechargement de l\'interface…');
+          setTimeout(() => {
+            document.getElementById('overlay-update').classList.remove('show');
+            window.location.reload();
+          }, 1500);
+        }
+      } catch (_) {
+        // Service en cours de redémarrage — normal
+        if (attempts >= maxAttempts) {
+          clearInterval(poll);
+          addLine('⚠ Timeout — rechargez la page manuellement.', 'warn');
+        }
+      }
+    }, 1500);
+ 
   } catch (e) {
-    alert('Erreur : ' + e.message);
+    addLine(`✗ Erreur : ${e.message}`, 'error');
+    btn.disabled = false;
   }
 }
+
 
 /* ── Utilitaires ──────────────────────────────────────────────────────────── */
 function esc(s) {

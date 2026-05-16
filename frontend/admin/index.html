@@ -273,6 +273,33 @@
   </div>
 </div>
 
+<!-- ══ Modal : Mise à jour application ════════════════════════════════════ -->
+<div class="overlay" id="overlay-update">
+  <div class="modal modal-sm">
+    <div class="modal-head">
+      <h3>⬆ Mise à jour de l'application</h3>
+      <button class="modal-close"
+        onclick="document.getElementById('overlay-update').classList.remove('show')">✕</button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:.85rem;color:var(--muted);margin-bottom:1rem">
+        Récupère la dernière version depuis GitHub et redémarre le service automatiquement.
+      </p>
+      <div class="log-box" id="update-log" style="min-height:80px;max-height:220px">
+        <div class="log-line" style="color:var(--muted)">Cliquer sur « Lancer » pour démarrer…</div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-secondary"
+        onclick="document.getElementById('overlay-update').classList.remove('show')">Fermer</button>
+      <button class="btn btn-primary" id="btn-start-update" onclick="startUpdate()">
+        ⬆ Lancer la mise à jour
+      </button>
+    </div>
+  </div>
+</div>
+
+
 <script src="admin.js"></script>
 <script src="mounts.js"></script>
 </body>

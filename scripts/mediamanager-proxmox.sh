@@ -2,7 +2,7 @@
 
 # MediaManager 2026 - Proxmox LXC Installer (Simple Version)
 # 
-# Usage: bash <(curl -fsSL https://raw.githubusercontent.com/higs76/mediamanager2026/raw/main/scripts/mediamanager-proxmox.sh)
+# Usage: bash <(curl -fsSL https://raw.githubusercontent.com/higs76/mediamanager2026/main/scripts/mediamanager-proxmox.sh)
 
 set -e
 
@@ -186,7 +186,7 @@ if [ "$READY" -ne 1 ]; then
     exit 1
 fi
 
-log_info "Prepare contaiiner (install curl...)"
+log_info "Prepare container (install curl...)"
 pct exec $CTID -- apt-get update
 pct exec $CTID -- apt-get install -y curl
 

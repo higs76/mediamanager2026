@@ -19,7 +19,9 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from contextlib import asynccontextmanager
 from packaging import version
+from uvicorn import lifespan
 
 from watcher.config import (
     API_HOST, API_PORT, API_DEBUG, PROJECT_ROOT,
@@ -56,7 +58,8 @@ else:
 app = FastAPI(
     title="MediaManager Watcher",
     description="Service de surveillance des fichiers vidéo",
-    version=APP_VERSION
+    version=APP_VERSION,
+    lifespan=lifespan
 )
 
 # ==========================================
@@ -92,7 +95,9 @@ def init_database_tables():
     try:
         import psycopg2
         from watcher.config import DATABASE_URL
-        sql = schema_file.read_text()
+        # encoding='utf-8' obligatoire : schema.sql contient des caractères
+        # accentués dans les commentaires, et le LXC peut être en locale ASCII
+        sql = schema_file.read_text(encoding='utf-8')
         conn = psycopg2.connect(DATABASE_URL)
         conn.autocommit = True
         with conn.cursor() as cur:
@@ -102,15 +107,83 @@ def init_database_tables():
     except Exception as e:
         logger.error(f"✗ Erreur init tables : {e}")
 
-@app.on_event("startup")
-async def on_startup():
-    """Appelé par uvicorn au démarrage de l'app — init BDD garantie."""
+
+def ensure_system_dependencies():
+    """
+    Vérifie et installe les dépendances système nécessaires si absentes.
+    Transparent pour l'utilisateur — géré automatiquement au démarrage.
+    - smbclient  : nécessaire pour lister les partages SMB (bouton Parcourir)
+    - nfs-common : contient showmount, nécessaire pour lister les exports NFS
+    - cifs-utils : nécessaire pour monter les partages SMB (mount -t cifs)
+    """
+    import shutil
+    import subprocess
+ 
+    packages_needed = []
+    if not shutil.which("smbclient"):
+        packages_needed.append("smbclient")
+    if not shutil.which("showmount"):
+        packages_needed.append("nfs-common")
+    if not shutil.which("mount.cifs"):
+        packages_needed.append("cifs-utils")
+ 
+    if not packages_needed:
+        logger.info("✓ Dépendances système OK")
+        return
+ 
+    logger.info(f"Installation des dépendances manquantes : {', '.join(packages_needed)}")
+    try:
+        subprocess.run(
+            ["apt-get", "install", "-y", "-qq"] + packages_needed,
+            capture_output=True, text=True, timeout=120
+        )
+        logger.info(f"✓ Dépendances installées : {', '.join(packages_needed)}")
+    except Exception as e:
+        logger.warning(f"⚠ Impossible d'installer les dépendances : {e}")
+
+def ensure_timezone():
+    """
+    Configure le fuseau horaire Europe/Paris si le système est en UTC.
+    Évite le décalage de 2h dans les logs.
+    """
+    import subprocess,os    
+    try:
+        result = subprocess.run(
+            ["timedatectl", "show", "--property=Timezone", "--value"],
+            capture_output=True, text=True, timeout=5
+        )
+        current_tz = result.stdout.strip()
+        if current_tz != "Europe/Paris":
+            subprocess.run(
+                ["timedatectl", "set-timezone", "Europe/Paris"],
+                capture_output=True, timeout=5
+            )
+            os.environ["TZ"] = "Europe/Paris"
+            logger.info("✓ Timezone configurée : Europe/Paris")
+        else:
+            logger.info(f"✓ Timezone OK : {current_tz}")
+    except Exception as e:
+        logger.warning(f"⚠ Impossible de configurer la timezone : {e}")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Gestionnaire de cycle de vie — remplace le @on_event déprécié.
+    Tout ce qui est avant 'yield' s'exécute au démarrage,
+    tout ce qui est après s'exécutera à l'arrêt.
+    """
     logger.info("=" * 60)
     logger.info(f"🚀 Démarrage MediaManager Watcher v{APP_VERSION}")
     logger.info(f"   API: http://{API_HOST}:{API_PORT}")
     logger.info(f"   Admin: http://{API_HOST}:{API_PORT}/admin")
     logger.info("=" * 60)
+    ensure_timezone()
+    ensure_system_dependencies()
     init_database_tables()
+    yield
+    # Arrêt propre (rien à faire pour l'instant)
+    logger.info("Arrêt du service MediaManager Watcher")
+
 
 # ==========================================
 # Servir les fichiers statiques (Frontend Admin)

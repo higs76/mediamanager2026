@@ -537,3 +537,54 @@ def browse_network(
             error = str(e)
 
     return JSONResponse({"server": server, "type": type, "shares": shares, "error": error})
+
+
+# ── Mise à jour application ───────────────────────────────────────────────────
+ 
+@router.post("/update")
+def trigger_update():
+    """
+    Lance un git pull + redémarrage du service.
+    Endpoint temporaire — sera remplacé par un système de versioning propre.
+    """
+    import subprocess
+    from pathlib import Path
+    from watcher.config import PROJECT_ROOT
+ 
+    results = {}
+ 
+    # 1. git pull
+    try:
+        r = subprocess.run(
+            ["git", "pull"],
+            cwd=str(PROJECT_ROOT),
+            capture_output=True, text=True, timeout=60
+        )
+        results["git_pull"] = {
+            "success":  r.returncode == 0,
+            "output":   r.stdout.strip() or r.stderr.strip()
+        }
+    except Exception as e:
+        results["git_pull"] = {"success": False, "output": str(e)}
+ 
+    # 2. Redémarrage du service (le service se relance lui-même)
+    # On utilise un thread pour répondre AVANT le redémarrage
+    if results["git_pull"]["success"]:
+        import threading
+        def restart():
+            import time, os, signal
+            time.sleep(1)   # laisser le temps à la réponse HTTP d'être envoyée
+            os.kill(os.getpid(), signal.SIGTERM)
+ 
+        threading.Thread(target=restart, daemon=True).start()
+        results["restart"] = "Service redémarrage dans 1 seconde…"
+    else:
+        results["restart"] = "Redémarrage annulé (git pull échoué)"
+ 
+    return JSONResponse({
+        "success": results["git_pull"]["success"],
+        "results": results,
+        "message": "Mise à jour lancée — l'interface sera disponible dans quelques secondes."
+        if results["git_pull"]["success"]
+        else f"Échec : {results['git_pull']['output']}"
+    })
