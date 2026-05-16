@@ -511,7 +511,7 @@ def browse_network(
     shares, error = [], None
  
     if type == "smb":
-        cmd = ["smbclient", "-N", "-L", f"//{server_clean}"]
+        cmd = ["/usr/bin/smbclient", "-N", "-L", f"//{server_clean}"]
         if username:
             cmd += ["-U", f"{username}%{password or ''}"]
         try:
@@ -530,7 +530,7 @@ def browse_network(
         except Exception as e:
             error = str(e)
     else:
-        cmd = ["showmount", "-e", "--no-headers", server_clean]
+        cmd = ["/usr/bin/showmount", "-e", "--no-headers", server_clean]
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
             for line in r.stdout.splitlines():
