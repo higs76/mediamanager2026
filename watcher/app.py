@@ -115,7 +115,7 @@ def ensure_system_dependencies():
         # sudo obligatoire : le service tourne en tant que mediamanager (non-root)
         # Le sudoers autorise exactement cette commande pour cet utilisateur
         subprocess.run(
-            ["sudo", apt, "install", "-y", "-qq"] + packages_needed,
+            ["/usr/bin/sudo", apt, "install", "-y", "-qq"] + packages_needed,
             capture_output=True, text=True, timeout=120
         )
         logger.info(f"✓ Dependances installees : {', '.join(packages_needed)}")
@@ -357,7 +357,7 @@ def restart_service(service: str):
     
     try:
         result = subprocess.run(
-            ["sudo", "systemctl", "restart", service_name],
+            ["/usr/bin/sudo", "systemctl", "restart", service_name],
             capture_output=True,
             text=True,
             timeout=10
@@ -402,7 +402,7 @@ def stop_service(service: str):
     
     try:
         result = subprocess.run(
-            ["sudo", "systemctl", "stop", service_name],
+            ["/usr/bin/sudo", "systemctl", "stop", service_name],
             capture_output=True,
             text=True,
             timeout=10
@@ -520,7 +520,7 @@ def check_postgres_running() -> bool:
     """Vérifie si PostgreSQL tourne"""
     try:
         result = subprocess.run(
-            ["sudo", "systemctl", "is-active", "postgresql"],
+            ["/usr/bin/sudo", "systemctl", "is-active", "postgresql"],
             capture_output=True,
             text=True,
             timeout=5

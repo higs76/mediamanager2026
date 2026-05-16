@@ -384,12 +384,12 @@ def _do_mount(local_path: str, mount_type: str, params: dict) -> tuple:
             options += ",guest"
         options += f",vers={params.get('smb_version','3.0')}"
         remote = f"{params['server']}/{params['share'].lstrip('/')}"
-        cmd = ["sudo", "mount", "-t", "cifs", remote, local_path, "-o", options]
+        cmd = ["/usr/bin/sudo", "mount", "-t", "cifs", remote, local_path, "-o", options]
     else:
         options = params.get("mount_options", "rw,soft,timeo=30")
         options += f",nfsvers={params.get('nfs_version', 4)}"
         remote = f"{params['server']}:{params['export_path']}"
-        cmd = ["sudo", "mount", "-t", "nfs", remote, local_path, "-o", options]
+        cmd = ["/usr/bin/sudo", "mount", "-t", "nfs", remote, local_path, "-o", options]
 
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
@@ -403,7 +403,7 @@ def _do_mount(local_path: str, mount_type: str, params: dict) -> tuple:
 def _do_umount(local_path: str) -> tuple:
     try:
         r = subprocess.run(
-            ["sudo", "umount", "-l", local_path],
+            ["/usr/bin/sudo", "umount", "-l", local_path],
             capture_output=True, text=True, timeout=30
         )
         return r.returncode == 0, r.stderr.strip()
