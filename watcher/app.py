@@ -21,7 +21,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 from packaging import version
-from uvicorn import lifespan
 
 from watcher.config import (
     API_HOST, API_PORT, API_DEBUG, PROJECT_ROOT,
@@ -51,32 +50,6 @@ if VERSION_FILE.exists():
     APP_VERSION = VERSION_FILE.read_text().strip()
 else:
     APP_VERSION = "0.1.0-unknown"
-
-# ==========================================
-# Créer l'app FastAPI
-# ==========================================
-app = FastAPI(
-    title="MediaManager Watcher",
-    description="Service de surveillance des fichiers vidéo",
-    version=APP_VERSION,
-    lifespan=lifespan
-)
-
-# ==========================================
-# Middleware CORS
-# ==========================================
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# ==========================================
-# Router Admin (montages, catégories, browse)
-# ==========================================
-app.include_router(admin_router)
 
 # ==========================================
 # Init BDD au démarrage
@@ -183,6 +156,33 @@ async def lifespan(app: FastAPI):
     yield
     # Arrêt propre (rien à faire pour l'instant)
     logger.info("Arrêt du service MediaManager Watcher")
+
+
+# ==========================================
+# Créer l'app FastAPI
+# ==========================================
+app = FastAPI(
+    title="MediaManager Watcher",
+    description="Service de surveillance des fichiers vidéo",
+    version=APP_VERSION,
+    lifespan=lifespan
+)
+
+# ==========================================
+# Middleware CORS
+# ==========================================
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ==========================================
+# Router Admin (montages, catégories, browse)
+# ==========================================
+app.include_router(admin_router)
 
 
 # ==========================================
