@@ -11,3 +11,4 @@ watchdog
 pytest
 pytest-asyncio
 python-json-logger
+packaging>=21.0

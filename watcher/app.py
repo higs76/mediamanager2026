@@ -12,12 +12,14 @@ import socket
 import sys
 import os
 import subprocess
+import requests
 from pathlib import Path
 from datetime import datetime
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from packaging import version
 
 from watcher.config import (
     API_HOST, API_PORT, API_DEBUG, PROJECT_ROOT,
@@ -88,13 +90,14 @@ def init_database_tables():
         logger.warning(f"⚠ schema.sql non trouvé : {schema_file}")
         return
     try:
+        import psycopg2
+        from watcher.config import DATABASE_URL
         sql = schema_file.read_text()
-        with engine.connect() as conn:
-            for statement in sql.split(';'):
-                s = statement.strip()
-                if s and not s.startswith('--'):
-                    conn.execute(text(s))
-            conn.commit()
+        conn = psycopg2.connect(DATABASE_URL)
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute(sql)
+        conn.close()
         logger.info("✓ Tables BDD vérifiées / créées")
     except Exception as e:
         logger.error(f"✗ Erreur init tables : {e}")
@@ -153,7 +156,20 @@ def get_dashboard():
     - Statut de la BD
     - Statut des montages
     """
+    # Récupérer la version de GitHub
+    github_version = get_latest_github_version()
+    version_info = {}
     
+    if github_version["error"] is None:
+        version_info = compare_versions(APP_VERSION, github_version["version"])
+        version_info["latest_url"] = github_version["url"]
+    else:
+        version_info = {
+            "has_update": False,
+            "current": APP_VERSION,
+            "error": github_version["error"]
+        }
+
     # Test connexion BD
     db_ok = test_db_connection()
     
@@ -162,13 +178,14 @@ def get_dashboard():
     
     # Statut PostgreSQL
     postgres_running = check_postgres_running()
-    
+
     # Statut montages
     mounts_info = get_mounts_info()
     
     return JSONResponse({
         "version": APP_VERSION,
         "timestamp": datetime.now().isoformat(),
+        "update_available": version_info,  # ← NOUVEAU
         "services": {
             "watcher": {
                 "name": "Watcher Service",
@@ -344,6 +361,69 @@ def get_status():
         "mount_base_path": str(MOUNT_BASE_PATH),
     })
 
+# ==========================================
+# Vérifier les versions
+# ==========================================
+
+def get_latest_github_version() -> dict:
+    """
+    Récupère la dernière version depuis GitHub releases
+    Retourne: {"version": "x.y.z", "url": "...", "error": null/str}
+    """
+    try:
+        # Récupérer les releases de GitHub
+        url = "https://api.github.com/repos/higs76/mediamanager2026/releases/latest"
+        headers = {"Accept": "application/vnd.github.v3+json"}
+        
+        response = requests.get(url, headers=headers, timeout=5)
+        
+        if response.status_code == 200:
+            data = response.json()
+            return {
+                "version": data.get("tag_name", "unknown").lstrip("v"),
+                "url": data.get("html_url"),
+                "published_at": data.get("published_at"),
+                "error": None
+            }
+        else:
+            return {
+                "version": None,
+                "url": None,
+                "published_at": None,
+                "error": f"GitHub API returned {response.status_code}"
+            }
+    except Exception as e:
+        return {
+            "version": None,
+            "url": None,
+            "published_at": None,
+            "error": str(e)
+        }
+    
+def compare_versions(current: str, latest: str) -> dict:
+    """
+    Compare deux versions et retourne l'info
+    Retourne: {"has_update": bool, "current": str, "latest": str}
+    """
+    try:
+        current_v = version.parse(current)
+        latest_v = version.parse(latest)
+        
+        has_update = latest_v > current_v
+        
+        return {
+            "has_update": has_update,
+            "current": str(current_v),
+            "latest": str(latest_v),
+            "message": f"Update available: {current} → {latest}" if has_update else "You are up to date"
+        }
+    except Exception as e:
+        return {
+            "has_update": False,
+            "current": current,
+            "latest": latest,
+            "error": str(e)
+        }    
 
 # ==========================================
 # HELPER FUNCTIONS
