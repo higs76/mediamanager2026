@@ -112,8 +112,10 @@ def ensure_system_dependencies():
         apt = "/usr/bin/apt-get"
         if not os.path.exists(apt):
             apt = shutil.which("apt-get") or "/usr/bin/apt-get"
+        # sudo obligatoire : le service tourne en tant que mediamanager (non-root)
+        # Le sudoers autorise exactement cette commande pour cet utilisateur
         subprocess.run(
-            [apt, "install", "-y", "-qq"] + packages_needed,
+            ["sudo", apt, "install", "-y", "-qq"] + packages_needed,
             capture_output=True, text=True, timeout=120
         )
         logger.info(f"✓ Dependances installees : {', '.join(packages_needed)}")

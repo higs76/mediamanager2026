@@ -129,15 +129,18 @@ create_user() {
         log_success "User mediamanager created (password: mediamanager)"
     fi
 
-    # Droits sudo limités : uniquement mount/umount (montages SMB)
-    # et redémarrage du service watcher.
-    # Fichier dédié dans sudoers.d → pas de doublon si le script est relancé.
+        # Droits sudo limités :
+    # - mount/umount : montages SMB/NFS
+    # - systemctl restart : redemarrage du service watcher
+    # - apt-get install : uniquement pour les outils reseau (smbclient, nfs-common, cifs-utils)
+    #   necessaire car le service peut avoir besoin de les installer au premier demarrage
+    # Fichier dedie dans sudoers.d → pas de doublon si le script est relance.
     cat > /etc/sudoers.d/mediamanager << 'SUDOEOF'
-mediamanager ALL=(ALL) NOPASSWD: /bin/mount, /bin/umount, /usr/bin/systemctl restart mediamanager-watcher
+mediamanager ALL=(ALL) NOPASSWD: /bin/mount, /bin/umount, /usr/bin/systemctl restart mediamanager-watcher, /usr/bin/apt-get install -y -qq smbclient nfs-common cifs-utils
 SUDOEOF
     chmod 440 /etc/sudoers.d/mediamanager
-    log_success "Sudoers configured (mount/umount/restart only)"
-
+    log_success "Sudoers configured"
+ 
     # Activer l'authentification SSH par mot de passe.
     # Ubuntu 24.04 la désactive par défaut, ce qui empêche de se connecter
     # en SSH avec user/password depuis VSCode ou un terminal.

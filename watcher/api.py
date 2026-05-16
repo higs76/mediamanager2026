@@ -506,10 +506,10 @@ def browse_network(
     """
     if type not in ("smb", "nfs"):
         raise HTTPException(400, "type doit être 'smb' ou 'nfs'")
-
+ 
     server_clean = server.lstrip("/")
     shares, error = [], None
-
+ 
     if type == "smb":
         cmd = ["smbclient", "-N", "-L", f"//{server_clean}"]
         if username:
@@ -524,7 +524,7 @@ def browse_network(
             if r.returncode != 0 and not shares:
                 error = r.stderr.strip() or r.stdout.strip()
         except FileNotFoundError:
-            error = "smbclient n'est pas installé (apt install smbclient)"
+            error = "Outil de navigation SMB non disponible — relancer le service pour l'installer automatiquement"
         except subprocess.TimeoutExpired:
             error = "Timeout — serveur inaccessible ou pare-feu"
         except Exception as e:
@@ -540,12 +540,12 @@ def browse_network(
             if r.returncode != 0 and not shares:
                 error = r.stderr.strip() or r.stdout.strip()
         except FileNotFoundError:
-            error = "showmount n'est pas installé (apt install nfs-common)"
+            error = "Outil de navigation NFS non disponible — relancer le service pour l'installer automatiquement"
         except subprocess.TimeoutExpired:
             error = "Timeout — serveur inaccessible ou NFS non activé"
         except Exception as e:
             error = str(e)
-
+ 
     return JSONResponse({"server": server, "type": type, "shares": shares, "error": error})
 
 
