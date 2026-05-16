@@ -73,6 +73,7 @@ def init_database_tables():
         sql = schema_file.read_text(encoding='utf-8')
         conn = psycopg2.connect(DATABASE_URL)
         conn.autocommit = True
+        conn.set_client_encoding('UTF8')
         with conn.cursor() as cur:
             cur.execute(sql)
         conn.close()
@@ -101,18 +102,24 @@ def ensure_system_dependencies():
         packages_needed.append("cifs-utils")
  
     if not packages_needed:
-        logger.info("✓ Dépendances système OK")
+        logger.info("✓ Dependances systeme OK")
         return
  
-    logger.info(f"Installation des dépendances manquantes : {', '.join(packages_needed)}")
+    logger.info(f"Installation des dependances manquantes : {', '.join(packages_needed)}")
     try:
+        import shutil
+        # Chemin absolu obligatoire : PATH restreint sous systemd
+        apt = "/usr/bin/apt-get"
+        if not os.path.exists(apt):
+            apt = shutil.which("apt-get") or "/usr/bin/apt-get"
         subprocess.run(
-            ["apt-get", "install", "-y", "-qq"] + packages_needed,
+            [apt, "install", "-y", "-qq"] + packages_needed,
             capture_output=True, text=True, timeout=120
         )
-        logger.info(f"✓ Dépendances installées : {', '.join(packages_needed)}")
+        logger.info(f"✓ Dependances installees : {', '.join(packages_needed)}")
     except Exception as e:
-        logger.warning(f"⚠ Impossible d'installer les dépendances : {e}")
+        logger.warning(f"⚠ Impossible d'installer les dependances : {e}")
+
 
 def ensure_timezone():
     """
