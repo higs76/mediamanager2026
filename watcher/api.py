@@ -513,7 +513,12 @@ def browse_network(
     if type == "smb":
         cmd = ["/usr/bin/smbclient", "-N", "-L", f"//{server_clean}"]
         if username:
-            cmd += ["-U", f"{username}%{password or ''}"]
+            # Avec credentials : pas de -N (anonyme), on passe -U user%password
+            cmd = ["/usr/bin/smbclient", "-L", f"//{server_clean}",
+                   "-U", f"{username}%{password or ''}"]
+        else:
+            # Sans credentials : accès anonyme avec -N
+            cmd = ["/usr/bin/smbclient", "-N", "-L", f"//{server_clean}"]
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
             for line in r.stdout.splitlines():

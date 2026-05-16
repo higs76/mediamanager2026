@@ -43,7 +43,11 @@ const Mounts = (() => {
           </div>
           <div class="form-group">
             <label class="form-label">Mot de passe</label>
-            <input id="f-password" type="password">
+            <div class="browse-row">
+              <input id="f-password" type="password" style="flex:1">
+              <button type="button" class="btn btn-secondary" style="flex-shrink:0;padding:.46rem .6rem"
+                onclick="Mounts._togglePassword()" id="btn-eye" title="Voir/masquer le mot de passe">👁</button>
+            </div>
           </div>
           <div class="form-group">
             <label class="form-label">Domaine</label>
