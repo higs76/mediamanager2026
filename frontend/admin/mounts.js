@@ -248,6 +248,13 @@ const Mounts = (() => {
     selectType(m.mount_type || 'smb');
     fillForm(m);
     renderCategorySelect();
+    // En édition : bloquer le changement de type
+    // Le type est lié à la table BDD (mount_smb ou mount_nfs) et ne peut pas changer
+    document.querySelectorAll('.type-card').forEach(c => {
+      c.style.opacity  = c.dataset.type === m.mount_type ? '1' : '0.35';
+      c.style.cursor   = c.dataset.type === m.mount_type ? 'default' : 'not-allowed';
+      c.style.pointerEvents = 'none';  // désactive tous les clics
+    });
     openOverlay('overlay-mount');
   }
 
@@ -412,6 +419,8 @@ const Mounts = (() => {
       closeOverlay('overlay-mount');
       await loadMounts();
       await loadCategories();
+      // Rafraîchir aussi les stats du dashboard
+      if (typeof loadDashboard === 'function') loadDashboard();
       showBanner('warn',
         '⚠ Modifications non appliquées',
         'Cliquer sur « Appliquer & Synchro » pour monter / démonter les partages.');
@@ -464,6 +473,7 @@ const Mounts = (() => {
         d.success ? '✓ Synchronisation réussie' : '⚠ Synchronisation avec erreurs',
         d.summary ?? '');
       await loadMounts();
+      if (typeof loadDashboard === 'function') loadDashboard();
     } catch (e) {
       showBanner('error', '✗ Erreur sync', e.message);
     } finally {

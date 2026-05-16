@@ -340,52 +340,45 @@ def get_logs(lines: int = 50):
 
 @app.post("/api/admin/services/{service}/restart")
 def restart_service(service: str):
-    """
-    Redémarre un service systemd
-    
-    Services disponibles:
-    - watcher
-    - postgresql
-    """
-    
+    """Redémarre un service systemd. Le watcher se redémarre via un thread."""
     if service not in ["watcher", "postgresql"]:
-        return JSONResponse({
-            "error": f"Service '{service}' not recognized"
-        }, status_code=400)
-    
-    service_name = f"mediamanager-watcher" if service == "watcher" else "postgresql"
-    
+        return JSONResponse({"error": f"Service '{service}' non reconnu"}, status_code=400)
+ 
+    service_name = "mediamanager-watcher" if service == "watcher" else "postgresql"
+ 
     try:
-        result = subprocess.run(
-            ["/usr/bin/sudo", "systemctl", "restart", service_name],
-            capture_output=True,
-            text=True,
-            timeout=10
-        )
-        
-        if result.returncode == 0:
-            logger.info(f"Service {service_name} redémarré")
+        if service == "watcher":
+            # Le watcher ne peut pas se tuer et répondre en même temps.
+            # On répond d'abord, puis on envoie SIGTERM dans un thread.
+            # systemd détecte l'arrêt et redémarre automatiquement (Restart=on-failure).
+            import threading, time, os, signal
+ 
+            def do_restart():
+                time.sleep(0.5)
+                os.kill(os.getpid(), signal.SIGTERM)
+ 
+            threading.Thread(target=do_restart, daemon=True).start()
+            logger.info("Redémarrage du watcher demandé (SIGTERM dans 0.5s)")
             return JSONResponse({
                 "status": "success",
                 "service": service,
-                "message": f"Service {service} restarted"
+                "message": "Redémarrage en cours — service disponible dans quelques secondes"
             })
         else:
-            logger.error(f"Erreur restart {service_name}: {result.stderr}")
-            return JSONResponse({
-                "status": "error",
-                "service": service,
-                "error": result.stderr
-            }, status_code=500)
-            
+            result = subprocess.run(
+                ["/usr/bin/sudo", "systemctl", "restart", service_name],
+                capture_output=True, text=True, timeout=15
+            )
+            if result.returncode == 0:
+                logger.info(f"Service {service_name} redémarré")
+                return JSONResponse({"status": "success", "service": service,
+                                     "message": f"Service {service} redémarré"})
+            else:
+                return JSONResponse({"status": "error", "error": result.stderr},
+                                    status_code=500)
     except Exception as e:
-        logger.error(f"Exception restart service: {e}")
-        return JSONResponse({
-            "status": "error",
-            "service": service,
-            "error": str(e)
-        }, status_code=500)
-
+        logger.error(f"Exception restart {service}: {e}")
+        return JSONResponse({"status": "error", "error": str(e)}, status_code=500)
 
 @app.post("/api/admin/services/{service}/stop")
 def stop_service(service: str):
@@ -531,13 +524,41 @@ def check_postgres_running() -> bool:
 
 
 def get_mounts_info() -> dict:
-    """Récupère info sur les montages"""
-    # TODO: implémenter vérification réelle des montages SMB
-    return {
-        "total": 0,
-        "healthy": 0,
-        "failed": 0
-    }
+    """Récupère les stats réelles des montages depuis la BDD et /proc/mounts."""
+    try:
+        from watcher.database import engine
+        from sqlalchemy import text
+ 
+        with engine.connect() as conn:
+            rows = conn.execute(text(
+                "SELECT local_path FROM mounts WHERE active = true"
+            )).fetchall()
+ 
+        total = len(rows)
+        if total == 0:
+            return {"total": 0, "healthy": 0, "failed": 0, "name": "Montages"}
+ 
+        # Lire /proc/mounts pour savoir ce qui est réellement monté
+        mounted = set()
+        try:
+            with open("/proc/mounts") as f:
+                for line in f:
+                    parts = line.split()
+                    if len(parts) >= 3 and parts[2] in ("cifs", "nfs", "nfs4"):
+                        mounted.add(parts[1])
+        except Exception:
+            pass
+ 
+        healthy = sum(1 for r in rows if r[0] in mounted)
+        return {
+            "name":    "Montages",
+            "total":   total,
+            "healthy": healthy,
+            "failed":  total - healthy
+        }
+    except Exception as e:
+        logger.warning(f"get_mounts_info: {e}")
+        return {"total": 0, "healthy": 0, "failed": 0, "name": "Montages"}
 
 
 def get_hostname() -> str:

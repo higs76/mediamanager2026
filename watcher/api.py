@@ -372,7 +372,7 @@ def _do_mount(local_path: str, mount_type: str, params: dict) -> tuple:
     """Exécute mount. Retourne (succès, message_erreur)."""
     import os
     os.makedirs(local_path, exist_ok=True)
-
+ 
     if mount_type == "smb":
         options = params.get("mount_options", "")
         if params.get("username"):
@@ -390,7 +390,7 @@ def _do_mount(local_path: str, mount_type: str, params: dict) -> tuple:
         options += f",nfsvers={params.get('nfs_version', 4)}"
         remote = f"{params['server']}:{params['export_path']}"
         cmd = ["/usr/bin/sudo", "mount", "-t", "nfs", remote, local_path, "-o", options]
-
+ 
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         return r.returncode == 0, r.stderr.strip()
@@ -472,11 +472,12 @@ def sync_mounts():
                     ), {"id": mount_id})
                 else:
                     report["errors"].append({"path": local_path, "error": err})
+                    logger.error(f"sync: échec montage {local_path} : {err}")
                     conn.execute(text(
                         "UPDATE mounts SET last_error=:e WHERE id=:id"
                     ), {"e": err, "id": mount_id})
             conn.commit()
-
+ 
         return JSONResponse({
             "success": len(report["errors"]) == 0,
             "summary": (f"+{len(report['added'])} montés, "
