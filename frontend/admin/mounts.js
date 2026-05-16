@@ -288,6 +288,19 @@ const Mounts = (() => {
     if (act) act.checked = m.active !== false;
   }
 
+  function _togglePassword() {
+    const input = document.getElementById('f-password');
+    const btn   = document.getElementById('btn-eye');
+    if (!input) return;
+    if (input.type === 'password') {
+      input.type = 'text';
+      btn.textContent = '🙈';
+    } else {
+      input.type = 'password';
+      btn.textContent = '👁';
+    }
+  }
+
   /* ── Browse réseau ────────────────────────────────────────────────────── */
   async function _browse(type) {
     const server = (getVal('f-server') || '').trim();
