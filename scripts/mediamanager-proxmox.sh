@@ -160,7 +160,7 @@ pct create $CTID "$TEMPLATE_STORAGE:vztmpl/$TEMPLATE" \
   --net0 "name=eth0,bridge=${BRG},ip=${NET}" \
   --rootfs "${STORAGE}:${DISK_SIZE}" \
   --unprivileged 1 \
-  --features nesting=1,keyctl=1,mknod=1 \
+  --features nesting=1,keyctl=1,mknod=1,cifs=1,nfs=1 \
   --onboot 1 \
   --start 1 \
   --ostype ubuntu

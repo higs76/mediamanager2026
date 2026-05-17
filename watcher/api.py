@@ -399,7 +399,7 @@ def _do_mount(local_path: str, mount_type: str, params: dict) -> tuple:
             # Erreur spécifique LXC non-privilégié : mount CIFS bloqué par AppArmor/capabilities
             if "Operation not permitted" in err or "not permitted" in err.lower():
                 err = (
-                    f"{err} — "
+                    f"{err} - "
                     "Montage CIFS bloqué par le LXC non-privilégié. "
                     "Sur le host Proxmox, ajouter dans /etc/pve/lxc/<id>.conf : "
                     "'lxc.apparmor.profile: unconfined' et 'lxc.cap.drop:' "
@@ -408,7 +408,7 @@ def _do_mount(local_path: str, mount_type: str, params: dict) -> tuple:
             return False, err
         return True, ""
     except subprocess.TimeoutExpired:
-        return False, "Timeout — serveur inaccessible"
+        return False, "Timeout - serveur inaccessible"
     except Exception as e:
         return False, str(e)
 
