@@ -160,12 +160,25 @@ pct create $CTID "$TEMPLATE_STORAGE:vztmpl/$TEMPLATE" \
   --net0 "name=eth0,bridge=${BRG},ip=${NET}" \
   --rootfs "${STORAGE}:${DISK_SIZE}" \
   --unprivileged 1 \
-  --features nesting=1 \
+  --features nesting=1,keyctl=1,mknod=1 \
   --onboot 1 \
   --start 1 \
   --ostype ubuntu
 
 log_success "LXC created"
+
+# Autoriser les montages CIFS/SMB depuis le LXC non-privilégié
+# Sans ça, mount -t cifs retourne "Operation not permitted"
+# keyctl=1 et mknod=1 sont nécessaires pour les montages réseau
+log_info "Configuring LXC for network mounts (CIFS/NFS)..."
+cat >> /etc/pve/lxc/${CTID}.conf << LXCEOF
+lxc.apparmor.profile: unconfined
+lxc.cap.drop:
+LXCEOF
+# Redémarrer le LXC pour appliquer les nouveaux paramètres
+pct reboot $CTID
+sleep 5
+log_success "LXC configured for CIFS/NFS mounts"
 
 # Attendre le démarrage
 log_info "Waiting for container..."

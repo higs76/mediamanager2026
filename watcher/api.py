@@ -3,6 +3,7 @@ MediaManager 2026 - API Admin : Montages & Catégories
 Toutes les routes /api/admin/...
 """
 
+import cmd
 import logging
 import subprocess
 from pathlib import Path
@@ -393,9 +394,21 @@ def _do_mount(local_path: str, mount_type: str, params: dict) -> tuple:
  
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        return r.returncode == 0, r.stderr.strip()
+        if r.returncode != 0:
+            err = r.stderr.strip()
+            # Erreur spécifique LXC non-privilégié : mount CIFS bloqué par AppArmor/capabilities
+            if "Operation not permitted" in err or "not permitted" in err.lower():
+                err = (
+                    f"{err} — "
+                    "Montage CIFS bloqué par le LXC non-privilégié. "
+                    "Sur le host Proxmox, ajouter dans /etc/pve/lxc/<id>.conf : "
+                    "'lxc.apparmor.profile: unconfined' et 'lxc.cap.drop:' "
+                    "puis redémarrer le LXC."
+                )
+            return False, err
+        return True, ""
     except subprocess.TimeoutExpired:
-        return False, "Timeout"
+        return False, "Timeout — serveur inaccessible"
     except Exception as e:
         return False, str(e)
 
@@ -571,8 +584,12 @@ def trigger_update():
  
     # 1. git pull
     try:
+        import shutil
+        git = "/usr/bin/git"
+        if not os.path.exists(git):
+            git = shutil.which("git") or "/usr/bin/git"
         r = subprocess.run(
-            ["git", "pull"],
+            ["/usr/bin/git", "pull"],
             cwd=str(PROJECT_ROOT),
             capture_output=True, text=True, timeout=60
         )
