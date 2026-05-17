@@ -369,41 +369,67 @@ def delete_mount(mount_id: int):
 
 # ── Synchronisation ───────────────────────────────────────────────────────────
 
+def _write_creds_file(username: str, password: str, domain: str) -> str:
+    """
+    Ecrit un fichier de credentials temporaire pour SMB.
+    Evite les problemes avec les caracteres speciaux dans les mots de passe
+    (#, !, $, espaces...) qui sont interpretes par le shell ou le parser d'options CIFS.
+    Retourne le chemin du fichier cree.
+    """
+    import tempfile, os
+    fd, path = tempfile.mkstemp(prefix="mm_creds_", suffix=".tmp")
+    try:
+        content = f"username={username}\npassword={password}\ndomain={domain}\n"
+        os.write(fd, content.encode("utf-8"))
+        os.fchmod(fd, 0o600)
+    finally:
+        os.close(fd)
+    return path
+
+
 def _do_mount(local_path: str, mount_type: str, params: dict) -> tuple:
     """Exécute mount. Retourne (succès, message_erreur)."""
     import os
     os.makedirs(local_path, exist_ok=True)
- 
-    if mount_type == "smb":
-        options = params.get("mount_options", "")
-        if params.get("username"):
-            options += f",username={params['username']}"
-            if params.get("password"):
-                options += f",password={params['password']}"
-            options += f",domain={params.get('domain','WORKGROUP')}"
-        else:
-            options += ",guest"
-        options += f",vers={params.get('smb_version','3.0')}"
-        remote = f"{params['server']}/{params['share'].lstrip('/')}"
-        cmd = ["/usr/bin/sudo", "mount", "-t", "cifs", remote, local_path, "-o", options]
-    else:
-        options = params.get("mount_options", "rw,soft,timeo=30")
-        options += f",nfsvers={params.get('nfs_version', 4)}"
-        remote = f"{params['server']}:{params['export_path']}"
-        cmd = ["/usr/bin/sudo", "mount", "-t", "nfs", remote, local_path, "-o", options]
- 
+
+    creds_file = None
+
     try:
+        if mount_type == "smb":
+            base_options = params.get("mount_options", "")
+            smb_version  = params.get("smb_version", "3.0")
+ 
+            if params.get("username"):
+                # Fichier credentials : gere tous les caracteres speciaux (#, !, $...)
+                # sans risque d'interpretation par le shell ou le parser d'options
+                creds_file = _write_creds_file(
+                    params["username"],
+                    params.get("password") or "",
+                    params.get("domain", "WORKGROUP")
+                )
+                options = f"{base_options},credentials={creds_file},vers={smb_version}"
+            else:
+                options = f"{base_options},guest,vers={smb_version}"
+ 
+            remote = f"{params['server']}/{params['share'].lstrip('/')}"
+            cmd = ["/usr/bin/sudo", "/bin/mount", "-t", "cifs",
+                   remote, local_path, "-o", options]
+        else:
+            options = params.get("mount_options", "rw,soft,timeo=30")
+            options += f",nfsvers={params.get('nfs_version', 4)}"
+            remote = f"{params['server']}:{params['export_path']}"
+            cmd = ["/usr/bin/sudo", "/bin/mount", "-t", "nfs",
+                   remote, local_path, "-o", options]
+ 
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if r.returncode != 0:
             err = r.stderr.strip()
-            # Erreur spécifique LXC non-privilégié : mount CIFS bloqué par AppArmor/capabilities
             if "Operation not permitted" in err or "not permitted" in err.lower():
                 err = (
-                    f"{err} - "
-                    "Montage CIFS bloqué par le LXC non-privilégié. "
+                    "Montage bloque par le LXC. "
                     "Sur le host Proxmox, ajouter dans /etc/pve/lxc/<id>.conf : "
-                    "'lxc.apparmor.profile: unconfined' et 'lxc.cap.drop:' "
-                    "puis redémarrer le LXC."
+                    "lxc.apparmor.profile: unconfined et lxc.cap.drop: "
+                    "puis redemarrer le LXC."
                 )
             return False, err
         return True, ""
@@ -411,6 +437,13 @@ def _do_mount(local_path: str, mount_type: str, params: dict) -> tuple:
         return False, "Timeout - serveur inaccessible"
     except Exception as e:
         return False, str(e)
+    finally:
+        # Toujours supprimer le fichier credentials apres usage
+        if creds_file:
+            try:
+                os.unlink(creds_file)
+            except Exception:
+                pass
 
 
 def _do_umount(local_path: str) -> tuple:
