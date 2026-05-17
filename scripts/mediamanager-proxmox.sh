@@ -160,23 +160,27 @@ pct create $CTID "$TEMPLATE_STORAGE:vztmpl/$TEMPLATE" \
   --net0 "name=eth0,bridge=${BRG},ip=${NET}" \
   --rootfs "${STORAGE}:${DISK_SIZE}" \
   --unprivileged 1 \
-  --features nesting=1,keyctl=1,mknod=1,cifs=1,nfs=1 \
+  --features nesting=1,keyctl=1,mknod=1 \
   --onboot 1 \
   --start 1 \
   --ostype ubuntu
 
 log_success "LXC created"
 
-# Autoriser les montages CIFS/SMB depuis le LXC non-privilégié
-# Sans ça, mount -t cifs retourne "Operation not permitted"
-# keyctl=1 et mknod=1 sont nécessaires pour les montages réseau
+# Autoriser les montages CIFS/SMB et NFS depuis le LXC non-privilégié via Proxmox
 log_info "Configuring LXC for network mounts (CIFS/NFS)..."
+
+# On utilise la directive officielle de Proxmox plutôt que de désactiver AppArmor
 cat >> /etc/pve/lxc/${CTID}.conf << LXCEOF
-lxc.apparmor.profile: unconfined
-lxc.cap.drop:
+features: cifs=1,nfs=1
 LXCEOF
+
 # Redémarrer le LXC pour appliquer les nouveaux paramètres
-pct reboot $CTID
+# Note : un "pct stop" suivi d'un "pct start" est souvent plus fiable qu'un "reboot" 
+# pour forcer Proxmox à relire la configuration matérielle d'un LXC.
+pct stop $CTID
+sleep 2
+pct start $CTID
 sleep 5
 log_success "LXC configured for CIFS/NFS mounts"
 
