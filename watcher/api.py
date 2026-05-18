@@ -386,6 +386,20 @@ def _write_creds_file(username: str, password: str, domain: str) -> str:
         os.close(fd)
     return path
 
+def _resolve_server(server: str) -> tuple:
+    """
+    Resout le nom de serveur en IP.
+    Retourne (nom_saisi, ip_resolue) pour aider au diagnostic DNS.
+    """
+    import socket
+    # Nettoyer le nom : retirer les // et tout ce qui suit le nom
+    name = server.lstrip("/").split("/")[0]
+    try:
+        ip = socket.gethostbyname(name)
+        return name, ip
+    except Exception:
+        return name, None
+
 
 def _do_mount(local_path: str, mount_type: str, params: dict) -> tuple:
     """Exécute mount. Retourne (succès, message_erreur)."""
@@ -424,21 +438,50 @@ def _do_mount(local_path: str, mount_type: str, params: dict) -> tuple:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if r.returncode != 0:
             err = r.stderr.strip()
-            if "Operation not permitted" in err or "not permitted" in err.lower():
+ 
+            # Resoudre le nom pour aider au diagnostic
+            server_name, server_ip = _resolve_server(params.get("server", ""))
+            dns_info = (
+                f"Nom interroge : {server_name} -> IP resolue : {server_ip}"
+                if server_ip
+                else f"Nom interroge : {server_name} -> resolution DNS echouee"
+            )
+ 
+            if "Permission denied" in err or "error(13)" in err:
+                err = (
+                    f"Acces refuse par le serveur (Permission denied). "
+                    f"{dns_info}. "
+                    "Verifier : 1) les identifiants (utilisateur/mot de passe) "
+                    "2) que l'IP resolue correspond bien au bon serveur "
+                    "(probleme DNS possible si le nom pointe vers une mauvaise IP) "
+                    "3) les droits d'acces sur le partage."
+                )
+            elif "Operation not permitted" in err or "not permitted" in err.lower():
                 err = (
                     "Montage bloque par le LXC. "
                     "Sur le host Proxmox, ajouter dans /etc/pve/lxc/<id>.conf : "
                     "lxc.apparmor.profile: unconfined et lxc.cap.drop: "
                     "puis redemarrer le LXC."
                 )
+            elif "No such host" in err or "Name or service not known" in err:
+                err = (
+                    f"Serveur introuvable. {dns_info}. "
+                    "Verifier le nom ou utiliser l'IP directe."
+                )
+            else:
+                err = f"{err} | {dns_info}"
+ 
             return False, err
         return True, ""
     except subprocess.TimeoutExpired:
-        return False, "Timeout - serveur inaccessible"
+        server_name, server_ip = _resolve_server(params.get("server", ""))
+        return False, (
+            f"Timeout - serveur inaccessible. "
+            f"Nom interroge : {server_name} -> IP resolue : {server_ip or 'inconnue'}"
+        )
     except Exception as e:
         return False, str(e)
     finally:
-        # Toujours supprimer le fichier credentials apres usage
         if creds_file:
             try:
                 os.unlink(creds_file)
