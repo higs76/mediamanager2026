@@ -49,16 +49,7 @@
         <button class="refresh-btn" onclick="refreshHeader()" title="Actualiser">↻</button>
       </div>
     </div>
-
-    <!-- Indicateur de version -->
-    <div id="version-indicator">
-      <span>App: <strong id="current-version">-</strong></span>
-      <span id="update-badge" style="display:none; background: #ff9800; padding: 4px 8px; border-radius: 3px; cursor: pointer;">
-        Update available: <strong id="latest-version">-</strong>
-        <a id="update-link" href="#" target="_blank">View</a>
-      </span>
-    </div>
-
+    
     <script>
     // Récupérer l'info du dashboard
     fetch('/api/admin/dashboard')
