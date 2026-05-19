@@ -649,51 +649,56 @@ def browse_network(
 @router.post("/update")
 def trigger_update():
     """
-    Lance un git pull + redémarrage du service.
-    Endpoint temporaire — sera remplacé par un système de versioning propre.
+    Lance un git pull + redemarrage du service.
+    Invalide le cache de version pour forcer une nouvelle verification au redemarrage.
     """
-    import subprocess
-    from pathlib import Path
+    import subprocess, shutil, os, threading, signal, time
     from watcher.config import PROJECT_ROOT
  
     results = {}
  
     # 1. git pull
     try:
-        import shutil
         git = "/usr/bin/git"
         if not os.path.exists(git):
             git = shutil.which("git") or "/usr/bin/git"
         r = subprocess.run(
-            ["/usr/bin/git", "pull"],
+            [git, "pull"],
             cwd=str(PROJECT_ROOT),
-            capture_output=True, text=True, timeout=60
+            capture_output=True, text=True, timeout=60,
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}
         )
+        # Encoder en ASCII pour eviter les erreurs de codec dans les logs
+        output = (r.stdout.strip() or r.stderr.strip()).encode("ascii", "replace").decode("ascii")
         results["git_pull"] = {
-            "success":  r.returncode == 0,
-            "output":   r.stdout.strip() or r.stderr.strip()
+            "success": r.returncode == 0,
+            "output":  output
         }
     except Exception as e:
         results["git_pull"] = {"success": False, "output": str(e)}
  
-    # 2. Redémarrage du service (le service se relance lui-même)
-    # On utilise un thread pour répondre AVANT le redémarrage
     if results["git_pull"]["success"]:
-        import threading
+        # Invalider le cache de version pour re-verifier apres redemarrage
+        try:
+            from watcher.app import get_latest_github_version
+            if hasattr(get_latest_github_version, "_cache"):
+                del get_latest_github_version._cache
+        except Exception:
+            pass
+ 
         def restart():
-            import time, os, signal
-            time.sleep(1)   # laisser le temps à la réponse HTTP d'être envoyée
+            time.sleep(0.8)
             os.kill(os.getpid(), signal.SIGTERM)
  
         threading.Thread(target=restart, daemon=True).start()
-        results["restart"] = "Service redémarrage dans 1 seconde…"
+        results["restart"] = "Redemarrage dans 1 seconde"
+        message = "Mise a jour lancee - interface disponible dans quelques secondes"
     else:
-        results["restart"] = "Redémarrage annulé (git pull échoué)"
+        results["restart"] = "Redemarrage annule (git pull echoue)"
+        message = f"Echec git pull : {results['git_pull']['output']}"
  
     return JSONResponse({
         "success": results["git_pull"]["success"],
         "results": results,
-        "message": "Mise à jour lancée — l'interface sera disponible dans quelques secondes."
-        if results["git_pull"]["success"]
-        else f"Échec : {results['git_pull']['output']}"
+        "message": message
     })

@@ -270,9 +270,11 @@ def get_dashboard():
     mounts_info = get_mounts_info()
     
     return JSONResponse({
-        "version": APP_VERSION,
+        "version":        APP_VERSION,
+        # latest_version lu directement par le JS pour le badge de mise à jour
+        "latest_version": version_info.get("latest") if version_info.get("has_update") else None,
+        "update_available": version_info,
         "timestamp": datetime.now().isoformat(),
-        "update_available": version_info,  # ← NOUVEAU
         "services": {
             "watcher": {
                 "name": "Watcher Service",
@@ -447,38 +449,44 @@ def get_status():
 
 def get_latest_github_version() -> dict:
     """
-    Récupère la dernière version depuis GitHub releases
+    Recupere la derniere version depuis GitHub releases.
+    Resultat mis en cache 30 minutes pour eviter de spammer l'API GitHub
+    (le dashboard se rafraichit toutes les 5s sinon).
     Retourne: {"version": "x.y.z", "url": "...", "error": null/str}
     """
+    import time
+ 
+    # Cache module-level : (timestamp, resultat)
+    cache = getattr(get_latest_github_version, "_cache", None)
+    if cache and (time.time() - cache["ts"]) < 1800:   # 30 minutes
+        return cache["data"]
+ 
     try:
-        # Récupérer les releases de GitHub
         url = "https://api.github.com/repos/higs76/mediamanager2026/releases/latest"
         headers = {"Accept": "application/vnd.github.v3+json"}
-        
         response = requests.get(url, headers=headers, timeout=5)
-        
+ 
         if response.status_code == 200:
             data = response.json()
-            return {
+            result = {
                 "version": data.get("tag_name", "unknown").lstrip("v"),
                 "url": data.get("html_url"),
                 "published_at": data.get("published_at"),
                 "error": None
             }
+        elif response.status_code == 404:
+            # Pas encore de release publiee sur GitHub (normal en dev)
+            result = {"version": None, "url": None, "published_at": None,
+                      "error": "Aucune release publiee sur GitHub"}
         else:
-            return {
-                "version": None,
-                "url": None,
-                "published_at": None,
-                "error": f"GitHub API returned {response.status_code}"
-            }
+            result = {"version": None, "url": None, "published_at": None,
+                      "error": f"GitHub API: HTTP {response.status_code}"}
     except Exception as e:
-        return {
-            "version": None,
-            "url": None,
-            "published_at": None,
-            "error": str(e)
-        }
+        result = {"version": None, "url": None, "published_at": None, "error": str(e)}
+ 
+    # Stocker en cache
+    get_latest_github_version._cache = {"ts": time.time(), "data": result}
+    return result
     
 def compare_versions(current: str, latest: str) -> dict:
     """

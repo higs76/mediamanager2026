@@ -33,6 +33,19 @@ function switchTab(name) {
 /* ── Dashboard ────────────────────────────────────────────────────────────── */
 function startDashboard() {
   loadDashboard();
+  // Vérification de version : au démarrage puis toutes les 30 minutes
+  // Séparée du refresh dashboard (5s) pour ne pas spammer GitHub API
+  checkVersion();
+}
+
+async function checkVersion() {
+  try {
+    const r = await fetch(`${API}/api/admin/dashboard`);
+    const d = await r.json();
+    setVersion(d.version, d.latest_version);
+  } catch (_) {}
+  clearTimeout(versionCheckTimer);
+  versionCheckTimer = setTimeout(checkVersion, 30 * 60 * 1000); // 30 minutes
 }
 
 async function loadDashboard() {
@@ -41,8 +54,13 @@ async function loadDashboard() {
     const r = await fetch(`${API}/api/admin/dashboard`);
     const d = await r.json();
 
+    // Header système (sans vérif version — gérée par checkVersion)
+    setText('sys-host', d.system?.host ?? '—');
+    setText('sys-ip',   d.system?.ip   ?? '—');
+    setText('sys-time', new Date().toLocaleTimeString('fr-FR'));
+
     // Header système
-    setSystemInfo(d);
+    //setSystemInfo(d);
 
     // Grille de cartes
     const grid = document.getElementById('dash-grid');
