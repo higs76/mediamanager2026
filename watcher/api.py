@@ -3,9 +3,14 @@ MediaManager 2026 - API Admin : Montages & Catégories
 Toutes les routes /api/admin/...
 """
 
-import cmd
 import logging
+import os
+import shutil
+import signal
 import subprocess
+import tempfile
+import threading
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -651,8 +656,7 @@ def trigger_update():
     """
     Lance un git pull + redemarrage du service.
     Invalide le cache de version pour forcer une nouvelle verification au redemarrage.
-    """
-    import subprocess, shutil, os, threading, signal, time
+    """    
     from watcher.config import PROJECT_ROOT
  
     results = {}
@@ -678,7 +682,16 @@ def trigger_update():
         results["git_pull"] = {"success": False, "output": str(e)}
  
     if results["git_pull"]["success"]:
-        # Invalider le cache de version pour re-verifier apres redemarrage
+        # Lire la nouvelle version depuis VERSION mis a jour par git pull
+        new_version = None
+        try:
+            version_file = PROJECT_ROOT / "VERSION"
+            if version_file.exists():
+                new_version = version_file.read_text(encoding="utf-8").strip()
+        except Exception:
+            pass
+ 
+        # Invalider le cache de version GitHub
         try:
             from watcher.app import get_latest_github_version
             if hasattr(get_latest_github_version, "_cache"):
@@ -692,13 +705,17 @@ def trigger_update():
  
         threading.Thread(target=restart, daemon=True).start()
         results["restart"] = "Redemarrage dans 1 seconde"
-        message = "Mise a jour lancee - interface disponible dans quelques secondes"
+        results["new_version"] = new_version
+        message = (f"Mise a jour vers {new_version} - interface disponible dans quelques secondes"
+                   if new_version else "Mise a jour lancee - interface disponible dans quelques secondes")
     else:
         results["restart"] = "Redemarrage annule (git pull echoue)"
+        results["new_version"] = None
         message = f"Echec git pull : {results['git_pull']['output']}"
  
     return JSONResponse({
-        "success": results["git_pull"]["success"],
-        "results": results,
-        "message": message
+        "success":     results["git_pull"]["success"],
+        "results":     results,
+        "new_version": results.get("new_version"),
+        "message":     message
     })

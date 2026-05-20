@@ -256,6 +256,12 @@ async function startUpdate() {
       return;
     }
  
+    // Afficher la nouvelle version et mettre à jour le header
+    if (d.new_version) {
+      addLine(`✓ Nouvelle version : ${d.new_version}`, 'ok');
+      setText('app-version', d.new_version);
+      document.getElementById('update-badge')?.classList.remove('visible');
+    }
     addLine('✓ Code mis à jour.', 'ok');
     addLine('→ Redémarrage du service…');
  
