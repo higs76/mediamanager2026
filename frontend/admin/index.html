@@ -56,7 +56,7 @@
         .then(r => r.json())
         .then(data => {
             // Afficher version actuelle
-            document.getElementById('current-version').textContent = data.version;
+            document.getElementById('app-version').textContent = data.version;
             
             // Afficher badge si update disponible
             if (data.update_available.has_update) {

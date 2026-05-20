@@ -31,6 +31,8 @@ function switchTab(name) {
 }
 
 /* ── Dashboard ────────────────────────────────────────────────────────────── */
+let versionCheckTimer = null;
+
 function startDashboard() {
   loadDashboard();
   // Vérification de version : au démarrage puis toutes les 30 minutes
