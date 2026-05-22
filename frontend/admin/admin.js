@@ -146,12 +146,21 @@ function setSystemInfo(d) {
   setVersion(d.version, d.latest_version);
 }
 
-function setVersion(current, latest) {
-  setText('app-version', current ?? '—');
+function setVersion(current, latest, build, branch) {
+  // Afficher version + hash court : "0.3.1-dev (a1b2c3d)"
+  const display = build && build !== 'unknown'
+    ? `${current ?? '—'} (${build})`
+    : (current ?? '—');
+  setText('app-version', display);
+ 
   const badge = document.getElementById('update-badge');
   if (latest && latest !== current) {
-    badge.textContent = `↑ ${latest}`;
-    badge.title = `Nouvelle version disponible : ${latest}. Cliquer pour mettre à jour.`;
+    // Adapter le message selon le mode
+    const isDev = branch === 'dev';
+    badge.textContent = isDev ? `↑ commit ${latest}` : `↑ ${latest}`;
+    badge.title = isDev
+      ? `Nouveau commit disponible sur la branche dev : ${latest}`
+      : `Nouvelle version disponible : ${latest}. Cliquer pour mettre à jour.`;
     badge.classList.add('visible');
   } else {
     badge.classList.remove('visible');

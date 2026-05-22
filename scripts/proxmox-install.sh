@@ -290,7 +290,7 @@ WorkingDirectory=/home/mediamanager/app
 EnvironmentFile=/home/mediamanager/app/.env
 Environment="PATH=/home/mediamanager/app/venv/bin"
 ExecStart=/home/mediamanager/app/venv/bin/python run.py
-Restart=on-failure
+Restart=always
 RestartSec=10
 
 [Install]

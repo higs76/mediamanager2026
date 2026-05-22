@@ -268,11 +268,23 @@ def get_dashboard():
 
     # Statut montages
     mounts_info = get_mounts_info()
+    git_info    = get_git_info()
+
+    # Mode dev : latest_version = hash du dernier commit
+    # Mode prod : latest_version = tag de la derniere Release
+    github_info = get_latest_github_version()
+
+    if github_info.get("mode") == "dev":
+        latest_version = github_info.get("commit") if github_info.get("has_update") else None
+    else:
+        latest_version = version_info.get("latest") if version_info.get("has_update") else None
+
     
     return JSONResponse({
         "version":        APP_VERSION,
-        # latest_version lu directement par le JS pour le badge de mise à jour
-        "latest_version": version_info.get("latest") if version_info.get("has_update") else None,
+        "build":          git_info.get("commit", "unknown"),
+        "branch":         git_info.get("branch", "unknown"),
+        "latest_version": latest_version,
         "update_available": version_info,
         "timestamp": datetime.now().isoformat(),
         "services": {
@@ -447,44 +459,90 @@ def get_status():
 # Vérifier les versions
 # ==========================================
 
+def get_git_info() -> dict:
+    """
+    Recupere la branche courante et le hash court du commit.
+    Permet de distinguer le mode dev (branche dev) du mode prod (branche main).
+    Retourne: {"branch": "main"|"dev"|..., "commit": "a1b2c3d"}
+    """
+    try:
+        branch = subprocess.run(
+            ["/usr/bin/git", "branch", "--show-current"],
+            cwd=str(PROJECT_ROOT), capture_output=True, text=True, timeout=5
+        ).stdout.strip() or "unknown"
+ 
+        commit = subprocess.run(
+            ["/usr/bin/git", "rev-parse", "--short", "HEAD"],
+            cwd=str(PROJECT_ROOT), capture_output=True, text=True, timeout=5
+        ).stdout.strip() or "unknown"
+ 
+        return {"branch": branch, "commit": commit}
+    except Exception:
+        return {"branch": "unknown", "commit": "unknown"}
+
 def get_latest_github_version() -> dict:
     """
-    Recupere la derniere version depuis GitHub releases.
-    Resultat mis en cache 30 minutes pour eviter de spammer l'API GitHub
-    (le dashboard se rafraichit toutes les 5s sinon).
-    Retourne: {"version": "x.y.z", "url": "...", "error": null/str}
+    Recupere la derniere version disponible depuis GitHub.
+    - Branche main  → interroge les Releases (version stable officielle)
+    - Branche dev   → interroge les commits de la branche dev (dernier hash)
+    Resultat mis en cache 30 minutes.
     """
     import time
  
-    # Cache module-level : (timestamp, resultat)
     cache = getattr(get_latest_github_version, "_cache", None)
-    if cache and (time.time() - cache["ts"]) < 1800:   # 30 minutes
+    if cache and (time.time() - cache["ts"]) < 1800:
         return cache["data"]
  
+    git_info = get_git_info()
+    branch   = git_info.get("branch", "main")
+    headers  = {"Accept": "application/vnd.github.v3+json"}
+    repo     = "higs76/mediamanager2026"
+ 
     try:
-        url = "https://api.github.com/repos/higs76/mediamanager2026/releases/latest"
-        headers = {"Accept": "application/vnd.github.v3+json"}
-        response = requests.get(url, headers=headers, timeout=5)
- 
-        if response.status_code == 200:
-            data = response.json()
-            result = {
-                "version": data.get("tag_name", "unknown").lstrip("v"),
-                "url": data.get("html_url"),
-                "published_at": data.get("published_at"),
-                "error": None
-            }
-        elif response.status_code == 404:
-            # Pas encore de release publiee sur GitHub (normal en dev)
-            result = {"version": None, "url": None, "published_at": None,
-                      "error": "Aucune release publiee sur GitHub"}
+        if branch == "dev":
+            # Mode dev : comparer le hash du dernier commit sur la branche dev
+            url = f"https://api.github.com/repos/{repo}/commits/dev"
+            response = requests.get(url, headers=headers, timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                remote_sha   = data.get("sha", "")[:7]
+                current_sha  = git_info.get("commit", "")
+                has_new      = remote_sha != current_sha
+                result = {
+                    "version":    remote_sha if has_new else None,
+                    "mode":       "dev",
+                    "commit":     remote_sha,
+                    "has_update": has_new,
+                    "url":        data.get("html_url"),
+                    "error":      None
+                }
+            else:
+                result = {"version": None, "mode": "dev", "has_update": False,
+                          "error": f"GitHub API: HTTP {response.status_code}"}
         else:
-            result = {"version": None, "url": None, "published_at": None,
-                      "error": f"GitHub API: HTTP {response.status_code}"}
+            # Mode prod : comparer avec la derniere Release officielle
+            url = f"https://api.github.com/repos/{repo}/releases/latest"
+            response = requests.get(url, headers=headers, timeout=5)
+            if response.status_code == 200:
+                data    = response.json()
+                tag     = data.get("tag_name", "").lstrip("v")
+                result  = {
+                    "version":    tag,
+                    "mode":       "prod",
+                    "has_update": False,  # compare_versions fera la vraie comparaison
+                    "url":        data.get("html_url"),
+                    "published_at": data.get("published_at"),
+                    "error":      None
+                }
+            elif response.status_code == 404:
+                result = {"version": None, "mode": "prod", "has_update": False,
+                          "error": "Aucune release publiee sur GitHub"}
+            else:
+                result = {"version": None, "mode": "prod", "has_update": False,
+                          "error": f"GitHub API: HTTP {response.status_code}"}
     except Exception as e:
-        result = {"version": None, "url": None, "published_at": None, "error": str(e)}
+        result = {"version": None, "mode": branch, "has_update": False, "error": str(e)}
  
-    # Stocker en cache
     get_latest_github_version._cache = {"ts": time.time(), "data": result}
     return result
     
