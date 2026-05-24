@@ -209,11 +209,12 @@ pct exec $CTID -- apt-get install -y curl
 
 
 # Installer MediaManager en appelant proxmox-install.sh depuis le repo
-# Pas de duplication : toute la logique d'installation est dans ce seul fichier.
-# Si proxmox-install.sh est corrigé, le fix s'applique automatiquement ici.
-log_info "Installing MediaManager inside container $CTID..."
+# La branche utilisee est celle definie dans GITHUB_BRANCH (defaut: main)
+# Pour installer depuis dev : GITHUB_BRANCH=dev bash mediamanager-proxmox.sh
+GITHUB_BRANCH="${GITHUB_BRANCH:-main}"
+log_info "Installing MediaManager from branch: $GITHUB_BRANCH"
 pct exec $CTID -- bash -c \
-    "curl -fsSL https://raw.githubusercontent.com/higs76/mediamanager2026/main/scripts/proxmox-install.sh | bash"
+    "curl -fsSL https://raw.githubusercontent.com/higs76/mediamanager2026/${GITHUB_BRANCH}/scripts/proxmox-install.sh | REPO_BRANCH=${GITHUB_BRANCH} bash"
  
 log_success "Installation complete!"
 
