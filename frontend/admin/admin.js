@@ -44,7 +44,7 @@ async function checkVersion() {
   try {
     const r = await fetch(`${API}/api/admin/dashboard`);
     const d = await r.json();
-    setVersion(d.version, d.latest_version);
+    setVersion(d.version, d.latest_version, d.build, d.update_available?.prerelease);
   } catch (_) {}
   clearTimeout(versionCheckTimer);
   versionCheckTimer = setTimeout(checkVersion, 30 * 60 * 1000); // 30 minutes
@@ -143,24 +143,31 @@ function setSystemInfo(d) {
   setText('sys-host', d.system?.host ?? '—');
   setText('sys-ip',   d.system?.ip   ?? '—');
   setText('sys-time', new Date().toLocaleTimeString('fr-FR'));
-  setVersion(d.version, d.latest_version);
+  setVersion(d.version, d.latest_version, d.build, d.update_available?.prerelease);
 }
 
-function setVersion(current, latest, build, branch) {
-  // Afficher version + hash court : "0.3.1-dev (a1b2c3d)"
+function setVersion(current, latest, build, isPrerelease) {
+  // Afficher version + hash court du commit : "0.3.2-dev (a1b2c3)"
   const display = build && build !== 'unknown'
     ? `${current ?? '—'} (${build})`
     : (current ?? '—');
   setText('app-version', display);
- 
+
   const badge = document.getElementById('update-badge');
   if (latest && latest !== current) {
-    // Adapter le message selon le mode
-    const isDev = branch === 'dev';
-    badge.textContent = isDev ? `↑ commit ${latest}` : `↑ ${latest}`;
-    badge.title = isDev
-      ? `Nouveau commit disponible sur la branche dev : ${latest}`
-      : `Nouvelle version disponible : ${latest}. Cliquer pour mettre à jour.`;
+    if (isPrerelease) {
+      // Pre-release : badge avec indication explicite (dev uniquement)
+      badge.textContent = `↑ ${latest} (dev)`;
+      badge.title = `Pre-release disponible : ${latest} — version de developpement.`;
+      badge.style.borderColor = 'var(--yellow)';
+      badge.style.color       = 'var(--yellow)';
+    } else {
+      // Release stable
+      badge.textContent = `↑ ${latest}`;
+      badge.title       = `Nouvelle version stable disponible : ${latest}`;
+      badge.style.borderColor = '';
+      badge.style.color       = '';
+    }
     badge.classList.add('visible');
   } else {
     badge.classList.remove('visible');

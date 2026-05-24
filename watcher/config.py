@@ -44,8 +44,13 @@ SMB_DEFAULT_USERNAME = os.getenv('SMB_DEFAULT_USERNAME', 'user')
 SMB_DEFAULT_PASSWORD = os.getenv('SMB_DEFAULT_PASSWORD', 'password')
 
 # ==========================================
-# Logging
+# Update / Versioning
 # ==========================================
+# ALLOW_PRERELEASE=true  : voir les pre-releases GitHub (versions -dev, -beta)
+#                          A mettre uniquement dans le .env du LXC developpeur
+# ALLOW_PRERELEASE=false : voir uniquement les releases stables (defaut)
+#                          Valeur par defaut pour tous les utilisateurs finaux
+ALLOW_PRERELEASE = os.getenv('ALLOW_PRERELEASE', 'false').lower() == 'true'
 LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 LOG_LEVEL = 'DEBUG' if API_DEBUG else 'INFO'
 LOG_FILE = LOGS_PATH / 'mediamanager.log'

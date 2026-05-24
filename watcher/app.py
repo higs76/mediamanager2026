@@ -482,66 +482,72 @@ def get_git_info() -> dict:
 
 def get_latest_github_version() -> dict:
     """
-    Recupere la derniere version disponible depuis GitHub.
-    - Branche main  → interroge les Releases (version stable officielle)
-    - Branche dev   → interroge les commits de la branche dev (dernier hash)
-    Resultat mis en cache 30 minutes.
-    """
+        Recupere la derniere version disponible depuis GitHub.
+    
+        Selon ALLOW_PRERELEASE dans le .env :
+        false (defaut) : interroge /releases/latest
+                        retourne uniquement la derniere release STABLE
+                        Les utilisateurs finaux ne voient jamais les versions -dev
+        true           : interroge /releases et prend la toute derniere
+                        (stable OU pre-release)
+                        Reservé au developpeur dans son .env
+    
+        Resultat mis en cache 30 minutes.
+        """
     import time
+    from watcher.config import ALLOW_PRERELEASE
  
     cache = getattr(get_latest_github_version, "_cache", None)
     if cache and (time.time() - cache["ts"]) < 1800:
         return cache["data"]
  
-    git_info = get_git_info()
-    branch   = git_info.get("branch", "main")
-    headers  = {"Accept": "application/vnd.github.v3+json"}
-    repo     = "higs76/mediamanager2026"
+    headers = {"Accept": "application/vnd.github.v3+json"}
+    repo    = "higs76/mediamanager2026"
  
     try:
-        if branch == "dev":
-            # Mode dev : comparer le hash du dernier commit sur la branche dev
-            url = f"https://api.github.com/repos/{repo}/commits/dev"
+        if ALLOW_PRERELEASE:
+            # Toutes les releases (stables + pre-releases) — developpeur uniquement
+            url      = f"https://api.github.com/repos/{repo}/releases?per_page=1"
             response = requests.get(url, headers=headers, timeout=5)
             if response.status_code == 200:
-                data = response.json()
-                remote_sha   = data.get("sha", "")[:7]
-                current_sha  = git_info.get("commit", "")
-                has_new      = remote_sha != current_sha
-                result = {
-                    "version":    remote_sha if has_new else None,
-                    "mode":       "dev",
-                    "commit":     remote_sha,
-                    "has_update": has_new,
-                    "url":        data.get("html_url"),
-                    "error":      None
-                }
+                releases = response.json()
+                if releases:
+                    data   = releases[0]
+                    result = {
+                        "version":      data.get("tag_name", "").lstrip("v"),
+                        "url":          data.get("html_url"),
+                        "published_at": data.get("published_at"),
+                        "prerelease":   data.get("prerelease", False),
+                        "error":        None
+                    }
+                else:
+                    result = {"version": None, "url": None, "prerelease": False,
+                              "error": "Aucune release publiee sur GitHub"}
             else:
-                result = {"version": None, "mode": "dev", "has_update": False,
+                result = {"version": None, "url": None, "prerelease": False,
                           "error": f"GitHub API: HTTP {response.status_code}"}
         else:
-            # Mode prod : comparer avec la derniere Release officielle
-            url = f"https://api.github.com/repos/{repo}/releases/latest"
+            # Releases stables uniquement — utilisateurs finaux
+            url      = f"https://api.github.com/repos/{repo}/releases/latest"
             response = requests.get(url, headers=headers, timeout=5)
             if response.status_code == 200:
-                data    = response.json()
-                tag     = data.get("tag_name", "").lstrip("v")
-                result  = {
-                    "version":    tag,
-                    "mode":       "prod",
-                    "has_update": False,  # compare_versions fera la vraie comparaison
-                    "url":        data.get("html_url"),
+                data   = response.json()
+                result = {
+                    "version":      data.get("tag_name", "").lstrip("v"),
+                    "url":          data.get("html_url"),
                     "published_at": data.get("published_at"),
-                    "error":      None
+                    "prerelease":   False,
+                    "error":        None
                 }
             elif response.status_code == 404:
-                result = {"version": None, "mode": "prod", "has_update": False,
-                          "error": "Aucune release publiee sur GitHub"}
+                result = {"version": None, "url": None, "prerelease": False,
+                          "error": "Aucune release stable publiee sur GitHub"}
             else:
-                result = {"version": None, "mode": "prod", "has_update": False,
+                result = {"version": None, "url": None, "prerelease": False,
                           "error": f"GitHub API: HTTP {response.status_code}"}
+ 
     except Exception as e:
-        result = {"version": None, "mode": branch, "has_update": False, "error": str(e)}
+        result = {"version": None, "url": None, "prerelease": False, "error": str(e)}
  
     get_latest_github_version._cache = {"ts": time.time(), "data": result}
     return result
