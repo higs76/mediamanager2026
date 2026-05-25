@@ -691,6 +691,28 @@ def trigger_update():
         except Exception:
             pass
  
+        # Mettre a jour le fichier service systemd depuis le repo
+        # Necessaire car proxmox-install.sh cree le service a l'installation
+        # et git pull ne met pas a jour /etc/systemd/system/
+        try:
+            service_src = PROJECT_ROOT / "scripts" / "mediamanager-watcher.service"
+            service_dst = "/etc/systemd/system/mediamanager-watcher.service"
+            if service_src.exists():
+                result = subprocess.run(
+                    ["/usr/bin/sudo", "cp", str(service_src), service_dst],
+                    capture_output=True, timeout=10
+                )
+                if result.returncode == 0:
+                    subprocess.run(
+                        ["/usr/bin/sudo", "systemctl", "daemon-reload"],
+                        capture_output=True, timeout=10
+                    )
+                    results["service_updated"] = True
+                    logger.info("Fichier service systemd mis a jour")
+        except Exception as e:
+            logger.warning(f"Impossible de mettre a jour le service systemd : {e}")
+            results["service_updated"] = False
+ 
         # Invalider le cache de version GitHub
         try:
             from watcher.app import get_latest_github_version

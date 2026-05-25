@@ -129,14 +129,14 @@ create_user() {
         log_success "User mediamanager created (password: mediamanager)"
     fi
 
-    # Droits sudo limités :
+   # Droits sudo limités :
     # - mount/umount : montages SMB/NFS
     # - systemctl restart : redemarrage du service watcher
     # - apt-get install : uniquement pour les outils reseau (smbclient, nfs-common, cifs-utils)
     #   necessaire car le service peut avoir besoin de les installer au premier demarrage
     # Fichier dedie dans sudoers.d → pas de doublon si le script est relance.
     cat > /etc/sudoers.d/mediamanager << 'SUDOEOF'
-mediamanager ALL=(ALL) NOPASSWD: /bin/mount, /bin/umount, /usr/bin/systemctl restart mediamanager-watcher, /usr/bin/apt-get install -y -qq smbclient nfs-common cifs-utils, /usr/bin/systemctl is-active postgresql, /usr/bin/systemctl is-active mediamanager-watcher
+mediamanager ALL=(ALL) NOPASSWD: /bin/mount, /bin/umount, /usr/bin/systemctl restart mediamanager-watcher, /usr/bin/systemctl start mediamanager-watcher, /usr/bin/systemctl stop mediamanager-watcher, /usr/bin/systemctl daemon-reload, /usr/bin/systemctl is-active postgresql, /usr/bin/systemctl is-active mediamanager-watcher, /usr/bin/apt-get install -y -qq smbclient nfs-common cifs-utils, /bin/cp /home/mediamanager/app/scripts/mediamanager-watcher.service /etc/systemd/system/mediamanager-watcher.service
 SUDOEOF
     chmod 440 /etc/sudoers.d/mediamanager
     log_success "Sudoers configured"

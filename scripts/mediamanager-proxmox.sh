@@ -211,8 +211,20 @@ pct exec $CTID -- apt-get install -y curl
 # Installer MediaManager en appelant proxmox-install.sh depuis le repo
 # La branche utilisee est celle definie dans GITHUB_BRANCH (defaut: main)
 # Pour installer depuis dev : GITHUB_BRANCH=dev bash mediamanager-proxmox.sh
-GITHUB_BRANCH="${GITHUB_BRANCH:-dev}"
-log_info "Installing MediaManager from branch: $GITHUB_BRANCH"
+# Detecter automatiquement la branche depuis le fichier VERSION sur main
+# Si VERSION contient "-dev", "-beta" ou "-rc" → installer depuis dev
+# Sinon → installer depuis main (release stable pour les utilisateurs)
+log_info "Detecting branch from VERSION file..."
+REMOTE_VERSION=$(curl -fsSL https://raw.githubusercontent.com/higs76/mediamanager2026/main/VERSION 2>/dev/null || echo "")
+ 
+if echo "$REMOTE_VERSION" | grep -qE '\-(dev|beta|rc)'; then
+    GITHUB_BRANCH="dev"
+    log_info "Dev version detected ($REMOTE_VERSION) → installing from branch: dev"
+else
+    GITHUB_BRANCH="${GITHUB_BRANCH:-main}"
+    log_info "Stable version detected ($REMOTE_VERSION) → installing from branch: $GITHUB_BRANCH"
+fi
+ 
 pct exec $CTID -- bash -c \
     "curl -fsSL https://raw.githubusercontent.com/higs76/mediamanager2026/${GITHUB_BRANCH}/scripts/proxmox-install.sh | REPO_BRANCH=${GITHUB_BRANCH} bash"
  

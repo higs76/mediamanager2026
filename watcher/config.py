@@ -46,11 +46,14 @@ SMB_DEFAULT_PASSWORD = os.getenv('SMB_DEFAULT_PASSWORD', 'password')
 # ==========================================
 # Update / Versioning
 # ==========================================
-# ALLOW_PRERELEASE=true  : voir les pre-releases GitHub (versions -dev, -beta)
-#                          A mettre uniquement dans le .env du LXC developpeur
-# ALLOW_PRERELEASE=false : voir uniquement les releases stables (defaut)
-#                          Valeur par defaut pour tous les utilisateurs finaux
-ALLOW_PRERELEASE = os.getenv('ALLOW_PRERELEASE', 'false').lower() == 'true'
+# IS_DEV est deduit automatiquement depuis le fichier VERSION :
+#   "0.4.0"     → mode production  → seules les releases stables sont proposées
+#   "0.4.0-dev" → mode dev         → les pre-releases sont aussi proposées
+#
+# Pas de variable .env à configurer — le fichier VERSION suffit.
+_version_file = PROJECT_ROOT / 'VERSION'
+_version_str  = _version_file.read_text(encoding='utf-8').strip() if _version_file.exists() else ''
+IS_DEV         = '-dev' in _version_str or '-beta' in _version_str or '-rc' in _version_str
 LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 LOG_LEVEL = 'DEBUG' if API_DEBUG else 'INFO'
 LOG_FILE = LOGS_PATH / 'mediamanager.log'

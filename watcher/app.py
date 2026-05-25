@@ -495,7 +495,7 @@ def get_latest_github_version() -> dict:
         Resultat mis en cache 30 minutes.
         """
     import time
-    from watcher.config import ALLOW_PRERELEASE
+    from watcher.config import IS_DEV
  
     cache = getattr(get_latest_github_version, "_cache", None)
     if cache and (time.time() - cache["ts"]) < 1800:
@@ -505,7 +505,7 @@ def get_latest_github_version() -> dict:
     repo    = "higs76/mediamanager2026"
  
     try:
-        if ALLOW_PRERELEASE:
+        if IS_DEV:
             # Toutes les releases (stables + pre-releases) — developpeur uniquement
             url      = f"https://api.github.com/repos/{repo}/releases?per_page=1"
             response = requests.get(url, headers=headers, timeout=5)
