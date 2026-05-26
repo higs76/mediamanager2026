@@ -1,6 +1,6 @@
 /* =============================================================================
    MediaManager 2026 — admin.js
-   Gestion : onglets, dashboard, logs, API, infos système, version/update
+   Dashboard, Logs, API, thème, version, mise à jour
    ============================================================================= */
 
 const API = `http://${window.location.hostname}:8000`;
@@ -9,114 +9,136 @@ const API = `http://${window.location.hostname}:8000`;
 let activeTab  = 'dashboard';
 let logTimer   = null;
 let dashTimer  = null;
+let versionTimer = null;
 
 function switchTab(name) {
   if (name === activeTab) return;
-
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-  document.querySelectorAll('.nav-tab').forEach(b => b.classList.remove('active'));
-
+  document.querySelectorAll('.nav-item[data-tab]').forEach(b => b.classList.remove('active'));
   document.getElementById('panel-' + name).classList.add('active');
-  document.querySelector(`.nav-tab[data-tab="${name}"]`).classList.add('active');
-
-  // Arrêter les timers des anciens onglets
+  document.querySelector(`.nav-item[data-tab="${name}"]`)?.classList.add('active');
   clearTimeout(logTimer);
   clearTimeout(dashTimer);
-
   activeTab = name;
-
   if (name === 'dashboard') startDashboard();
   else if (name === 'logs')  startLogs();
-  else if (name === 'mounts') Mounts.init();
+}
+
+/* ── Thème ────────────────────────────────────────────────────────────────── */
+function setTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  localStorage.setItem('mm-theme', theme);
+  document.querySelectorAll('.theme-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById(`theme-btn-${theme}`)?.classList.add('active');
 }
 
 /* ── Dashboard ────────────────────────────────────────────────────────────── */
-let versionCheckTimer = null;
-
 function startDashboard() {
   loadDashboard();
-  // Vérification de version : au démarrage puis toutes les 30 minutes
-  // Séparée du refresh dashboard (5s) pour ne pas spammer GitHub API
   checkVersion();
-}
-
-async function checkVersion() {
-  try {
-    const r = await fetch(`${API}/api/admin/dashboard`);
-    const d = await r.json();
-    setVersion(d.version, d.latest_version, d.build, d.update_available?.prerelease);
-  } catch (_) {}
-  clearTimeout(versionCheckTimer);
-  versionCheckTimer = setTimeout(checkVersion, 30 * 60 * 1000); // 30 minutes
 }
 
 async function loadDashboard() {
   if (activeTab !== 'dashboard') return;
   try {
     const r = await fetch(`${API}/api/admin/dashboard`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const d = await r.json();
 
-    // Header système (sans vérif version — gérée par checkVersion)
+    // Header système
     setText('sys-host', d.system?.host ?? '—');
     setText('sys-ip',   d.system?.ip   ?? '—');
     setText('sys-time', new Date().toLocaleTimeString('fr-FR'));
 
-    // Header système
-    //setSystemInfo(d);
+    // Cartes statut
+    renderDashCards(d);
 
-    // Grille de cartes
-    const grid = document.getElementById('dash-grid');
-    const watcher = d.services?.watcher ?? {};
-    const db      = d.services?.database ?? {};
-    const mounts  = d.services?.mounts  ?? {};
+    // Stats
+    updateDashStats(d);
 
-    grid.innerHTML = `
-      ${serviceCard('⚙️', watcher.name || 'Watcher', watcher, true)}
-      ${serviceCard('🗄️', db.name      || 'Database', db,  false)}
-      ${mountCard(mounts)}
-    `;
   } catch (e) {
-    showDashMsg('error', `Connexion impossible : ${e.message}`);
+    showDashMsg('error', e.message);
   }
   dashTimer = setTimeout(loadDashboard, 5000);
 }
 
-function serviceCard(icon, name, svc, withActions) {
-  const st = (svc.status || 'unknown').toLowerCase();
-  const cls = st === 'running' ? 'badge-green' : st === 'stopped' ? 'badge-red' : 'badge-muted';
-  let rows = `
-    <div class="service-row">
-      <span class="service-label">Status</span>
-      <span class="badge ${cls}"><span class="badge-dot"></span>${(svc.status || '—').toUpperCase()}</span>
-    </div>`;
-  if (svc.pid)      rows += row('PID', svc.pid);
-  if (svc.type)     rows += row('Type', svc.type);
-  if (svc.database) rows += row('Base', svc.database);
+function renderDashCards(d) {
+  const watcher = d.services?.watcher   ?? {};
+  const db      = d.services?.database  ?? {};
+  const mounts  = d.services?.mounts    ?? {};
 
-  const actions = withActions ? `
-    <div class="card-actions">
-      <button class="btn btn-secondary" onclick="svcAction('watcher','restart')">↺ Restart</button>
-      <button class="btn btn-danger"    onclick="svcAction('watcher','stop')">▪ Stop</button>
-    </div>` : '';
+  const isRunning = (watcher.status || '').toLowerCase() === 'running';
+  const isConn    = (db.status || '').toLowerCase() === 'connected';
 
-  return `<div class="card"><div class="card-title">${icon} ${name}</div>${rows}${actions}</div>`;
-}
-
-function mountCard(m) {
-  return `
+  document.getElementById('dash-grid').innerHTML = `
+    <!-- Système -->
     <div class="card">
-      <div class="card-title">📁 ${m.name || 'Montages'}</div>
-      ${row('Total',      m.total   ?? '—')}
-      ${row('Montés',     m.healthy ?? '—')}
-      ${row('En erreur',  m.failed  ?? '—')}
+      <div class="card-header"><i class="bi bi-pc-display-horizontal"></i> Système hôte</div>
+      <div class="card-row"><span class="card-label">Démarré le</span>
+        <span class="card-value" style="font-size:.82rem;color:var(--blue)">${d.system?.start_time ?? '—'}</span></div>
+      <div class="card-row"><span class="card-label">Uptime</span>
+        <span class="badge badge-info"><span class="dot"></span>${d.system?.uptime ?? '—'}</span></div>
+      <div class="card-row"><span class="card-label">IP</span>
+        <span class="card-value">${d.system?.ip ?? '—'}</span></div>
+    </div>
+
+    <!-- Watcher -->
+    <div class="card">
+      <div class="card-header"><i class="bi bi-cpu"></i> Watcher Service</div>
+      <div class="card-row"><span class="card-label">Statut</span>
+        <span class="badge ${isRunning ? 'badge-success' : 'badge-danger'}">
+          <span class="dot"></span>${isRunning ? 'Running' : 'Stopped'}
+        </span></div>
+      <div class="card-row"><span class="card-label">PID</span>
+        <span class="card-value">${watcher.pid ?? '—'}</span></div>
+      <div class="card-row"><span class="card-label">Version</span>
+        <span class="card-value">${d.version ?? '—'}</span></div>
       <div class="card-actions">
-        <button class="btn btn-secondary" onclick="switchTab('mounts')">→ Gérer les montages</button>
+        <button class="btn btn-sm" onclick="svcAction('watcher','restart')">
+          <i class="bi bi-arrow-clockwise"></i> Restart
+        </button>
+        <button class="btn btn-sm btn-danger" onclick="svcAction('watcher','stop')">
+          <i class="bi bi-stop-fill"></i> Stop
+        </button>
       </div>
-    </div>`;
+    </div>
+
+    <!-- PostgreSQL -->
+    <div class="card">
+      <div class="card-header"><i class="bi bi-database"></i> PostgreSQL</div>
+      <div class="card-row"><span class="card-label">Statut</span>
+        <span class="badge ${isConn ? 'badge-success' : 'badge-danger'}">
+          <span class="dot"></span>${isConn ? 'Connected' : 'Disconnected'}
+        </span></div>
+      <div class="card-row"><span class="card-label">Type</span>
+        <span class="card-value">${db.type ?? 'PostgreSQL'}</span></div>
+      <div class="card-row"><span class="card-label">Base</span>
+        <span class="card-value" style="color:var(--blue)">${db.database ?? '—'}</span></div>
+    </div>
+  `;
 }
 
-function row(label, val) {
-  return `<div class="service-row"><span class="service-label">${label}</span><span class="service-val">${val}</span></div>`;
+function updateDashStats(d) {
+  const m = d.services?.mounts ?? {};
+  const total   = m.total   ?? 0;
+  const healthy = m.healthy ?? 0;
+  const failed  = m.failed  ?? 0;
+
+  setText('stat-mounts-up',    healthy);
+  setText('stat-mounts-down',  failed);
+  setText('stat-mounts-total', total);
+  setText('stat-mounts-up2',   healthy);
+  setText('stat-mounts-down2', failed);
+  setText('stat-mounts-label', `${total} montage${total > 1 ? 's' : ''} configuré${total > 1 ? 's' : ''}`);
+  const mPct = total > 0 ? Math.round(healthy / total * 100) : 0;
+  const mBar = document.getElementById('stat-mounts-bar');
+  if (mBar) mBar.style.width = mPct + '%';
+
+  // Catégories depuis Mounts si disponible
+  if (typeof Mounts !== 'undefined') {
+    const cats = [...new Set(Mounts._allMounts?.map(m => m.category_name).filter(Boolean) ?? [])];
+    setText('stat-categories-list', cats.length ? cats.join(', ') : '—');
+  }
 }
 
 async function svcAction(svc, action) {
@@ -125,7 +147,7 @@ async function svcAction(svc, action) {
     const r = await fetch(`${API}/api/admin/services/${svc}/${action}`, { method: 'POST' });
     const d = await r.json();
     showDashMsg(d.status === 'success' ? 'ok' : 'error', d.message || d.error);
-    setTimeout(loadDashboard, 1500);
+    setTimeout(loadDashboard, 2000);
   } catch (e) {
     showDashMsg('error', e.message);
   }
@@ -133,21 +155,44 @@ async function svcAction(svc, action) {
 
 function showDashMsg(type, msg) {
   const el = document.getElementById('dash-msg');
-  const cls = type === 'ok' ? 'badge-green' : 'badge-red';
-  el.innerHTML = `<div class="badge ${cls}" style="margin-top:.75rem">${msg}</div>`;
-  setTimeout(() => { el.innerHTML = ''; }, 4000);
+  const cls = type === 'ok' ? 'badge-success' : 'badge-danger';
+  el.innerHTML = `<span class="badge ${cls}" style="margin-top:8px">${esc(msg)}</span>`;
+  setTimeout(() => { el.innerHTML = ''; }, 5000);
 }
 
-/* ── Infos système (header) ───────────────────────────────────────────────── */
-function setSystemInfo(d) {
-  setText('sys-host', d.system?.host ?? '—');
-  setText('sys-ip',   d.system?.ip   ?? '—');
-  setText('sys-time', new Date().toLocaleTimeString('fr-FR'));
-  setVersion(d.version, d.latest_version, d.build, d.update_available?.prerelease);
+/* ── Stats panel toggle ───────────────────────────────────────────────────── */
+function toggleStats() {
+  const drawer  = document.getElementById('stats-drawer');
+  const chevron = document.getElementById('stats-chevron');
+  drawer.classList.toggle('open');
+  chevron.classList.toggle('open');
+}
+
+/* ── Système header ───────────────────────────────────────────────────────── */
+async function refreshHeader() {
+  try {
+    const r = await fetch(`${API}/api/admin/dashboard`);
+    const d = await r.json();
+    setText('sys-host', d.system?.host ?? '—');
+    setText('sys-ip',   d.system?.ip   ?? '—');
+    setText('sys-time', new Date().toLocaleTimeString('fr-FR'));
+    setVersion(d.version, d.latest_version, d.build, d.update_available?.prerelease);
+  } catch (_) {}
+}
+
+/* ── Version ──────────────────────────────────────────────────────────────── */
+async function checkVersion() {
+  try {
+    const r = await fetch(`${API}/api/admin/dashboard`);
+    const d = await r.json();
+    setVersion(d.version, d.latest_version, d.build, d.update_available?.prerelease);
+  } catch (_) {}
+  clearTimeout(versionTimer);
+  versionTimer = setTimeout(checkVersion, 30 * 60 * 1000);
 }
 
 function setVersion(current, latest, build, isPrerelease) {
-  // Afficher version + hash court du commit : "0.3.2-dev (a1b2c3)"
+  // Afficher version + hash court : "0.3.2-dev (a1b2c3)"
   const display = build && build !== 'unknown'
     ? `${current ?? '—'} (${build})`
     : (current ?? '—');
@@ -155,16 +200,15 @@ function setVersion(current, latest, build, isPrerelease) {
 
   const badge = document.getElementById('update-badge');
   if (latest && latest !== current) {
+    const label = isPrerelease ? `${latest} (dev)` : latest;
+    setText('update-label', label);
+    badge.title = isPrerelease
+      ? `Pre-release : ${latest} — version de développement`
+      : `Nouvelle version stable : ${latest}`;
     if (isPrerelease) {
-      // Pre-release : badge avec indication explicite (dev uniquement)
-      badge.textContent = `↑ ${latest} (dev)`;
-      badge.title = `Pre-release disponible : ${latest} — version de developpement.`;
       badge.style.borderColor = 'var(--yellow)';
       badge.style.color       = 'var(--yellow)';
     } else {
-      // Release stable
-      badge.textContent = `↑ ${latest}`;
-      badge.title       = `Nouvelle version stable disponible : ${latest}`;
       badge.style.borderColor = '';
       badge.style.color       = '';
     }
@@ -174,20 +218,70 @@ function setVersion(current, latest, build, isPrerelease) {
   }
 }
 
-function setText(id, val) {
-  const el = document.getElementById(id);
-  if (el) el.textContent = val;
+/* ── Mise à jour ──────────────────────────────────────────────────────────── */
+function triggerUpdate() {
+  document.getElementById('overlay-update').classList.add('active');
 }
 
-async function refreshHeader() {
-  const btn = document.querySelector('.refresh-btn');
-  if (btn) btn.textContent = '…';
+async function startUpdate() {
+  const log = document.getElementById('update-log');
+  const btn = document.getElementById('btn-start-update');
+  btn.disabled = true;
+  log.innerHTML = '';
+
+  function addLine(text, cls = '') {
+    const d = document.createElement('div');
+    d.className = 'log-line' + (cls ? ' ' + cls : '');
+    d.textContent = text;
+    log.appendChild(d);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  addLine('→ Récupération des dernières modifications (git pull)…');
   try {
-    const r = await fetch(`${API}/api/admin/dashboard`);
+    const r = await fetch(`${API}/api/admin/update`, { method: 'POST' });
     const d = await r.json();
-    setSystemInfo(d);
-  } catch (_) {}
-  if (btn) btn.textContent = '↻';
+    if (d.results?.git_pull?.output) {
+      addLine(d.results.git_pull.output, d.results.git_pull.success ? 'ok' : 'error');
+    }
+    if (!d.success) {
+      addLine('✗ Mise à jour échouée.', 'error');
+      btn.disabled = false;
+      return;
+    }
+    if (d.new_version) {
+      addLine(`✓ Nouvelle version : ${d.new_version}`, 'ok');
+      setText('app-version', d.new_version);
+      document.getElementById('update-badge')?.classList.remove('visible');
+    }
+    addLine('✓ Code mis à jour.', 'ok');
+    addLine('→ Redémarrage du service…');
+
+    let attempts = 0;
+    const poll = setInterval(async () => {
+      attempts++;
+      try {
+        const h = await fetch(`${API}/health`, { cache: 'no-store' });
+        if (h.ok) {
+          clearInterval(poll);
+          addLine('✓ Service redémarré !', 'ok');
+          addLine('→ Rechargement de l\'interface…');
+          setTimeout(() => {
+            document.getElementById('overlay-update').classList.remove('active');
+            window.location.reload();
+          }, 1500);
+        }
+      } catch (_) {
+        if (attempts >= 20) {
+          clearInterval(poll);
+          addLine('⚠ Timeout — recharger la page manuellement.', 'warn');
+        }
+      }
+    }, 1500);
+  } catch (e) {
+    addLine(`✗ Erreur : ${e.message}`, 'error');
+    btn.disabled = false;
+  }
 }
 
 /* ── Logs ─────────────────────────────────────────────────────────────────── */
@@ -211,7 +305,7 @@ async function loadLogs() {
     }
   } catch (e) {
     document.getElementById('log-box').innerHTML =
-      `<div class="log-line error">Erreur : ${e.message}</div>`;
+      `<div class="log-line error">Erreur : ${esc(e.message)}</div>`;
   }
   logTimer = setTimeout(loadLogs, 5000);
 }
@@ -219,9 +313,9 @@ async function loadLogs() {
 function classifyLog(line) {
   const l = line.toLowerCase();
   if (l.includes('error') || l.includes('erreur') || l.includes('exception')) return 'error';
-  if (l.includes('warn')  || l.includes('warning'))  return 'warn';
+  if (l.includes('warn'))  return 'warn';
   if (l.includes('info'))  return 'info';
-  if (l.includes('ok') || l.includes('success') || l.includes('démarr')) return 'ok';
+  if (l.includes('ok') || l.includes('success') || l.includes('réussi')) return 'ok';
   return '';
 }
 
@@ -232,91 +326,14 @@ async function testAPIConn() {
   try {
     const r = await fetch(`${API}/health`);
     const d = await r.json();
-    el.innerHTML = `<span class="badge badge-green">✓ ${d.status ?? 'ok'}</span>`;
+    el.innerHTML = `<span class="badge badge-success"><span class="dot"></span>${d.status ?? 'ok'}</span>`;
   } catch (e) {
-    el.innerHTML = `<span class="badge badge-red">✗ ${e.message}</span>`;
+    el.innerHTML = `<span class="badge badge-danger"><span class="dot"></span>${esc(e.message)}</span>`;
   }
 }
-
-/* ── Update ───────────────────────────────────────────────────────────────── */
-async function triggerUpdate() {
-  // Afficher la popup de mise à jour
-  document.getElementById('overlay-update').classList.add('show');
-}
-
-async function startUpdate() {
-  const log = document.getElementById('update-log');
-  const btn  = document.getElementById('btn-start-update');
-  btn.disabled = true;
-  log.innerHTML = '';
- 
-  function addLine(text, cls = '') {
-    const d = document.createElement('div');
-    d.className = 'log-line' + (cls ? ' ' + cls : '');
-    d.textContent = text;
-    log.appendChild(d);
-    log.scrollTop = log.scrollHeight;
-  }
- 
-  addLine('→ Récupération des dernières modifications (git pull)…');
- 
-  try {
-    const r = await fetch(`${API}/api/admin/update`, { method: 'POST' });
-    const d = await r.json();
- 
-    if (d.results?.git_pull?.output) {
-      addLine(d.results.git_pull.output, d.results.git_pull.success ? 'ok' : 'error');
-    }
- 
-    if (!d.success) {
-      addLine('✗ Mise à jour échouée.', 'error');
-      btn.disabled = false;
-      return;
-    }
- 
-    // Afficher la nouvelle version et mettre à jour le header
-    if (d.new_version) {
-      addLine(`✓ Nouvelle version : ${d.new_version}`, 'ok');
-      setText('app-version', d.new_version);
-      document.getElementById('update-badge')?.classList.remove('visible');
-    }
-    addLine('✓ Code mis à jour.', 'ok');
-    addLine('→ Redémarrage du service…');
- 
-    // Attendre que le service redémarre puis recharger la page
-    let attempts = 0;
-    const maxAttempts = 20;
- 
-    const poll = setInterval(async () => {
-      attempts++;
-      try {
-        const health = await fetch(`${API}/health`, { cache: 'no-store' });
-        if (health.ok) {
-          clearInterval(poll);
-          addLine('✓ Service redémarré !', 'ok');
-          addLine('→ Rechargement de l\'interface…');
-          setTimeout(() => {
-            document.getElementById('overlay-update').classList.remove('show');
-            window.location.reload();
-          }, 1500);
-        }
-      } catch (_) {
-        // Service en cours de redémarrage — normal
-        if (attempts >= maxAttempts) {
-          clearInterval(poll);
-          addLine('⚠ Timeout — rechargez la page manuellement.', 'warn');
-        }
-      }
-    }, 1500);
- 
-  } catch (e) {
-    addLine(`✗ Erreur : ${e.message}`, 'error');
-    btn.disabled = false;
-  }
-}
-
 
 /* ── Utilitaires ──────────────────────────────────────────────────────────── */
+function setText(id, v) { const el = document.getElementById(id); if (el) el.textContent = v; }
 function esc(s) {
   return String(s ?? '')
     .replace(/&/g,'&amp;').replace(/</g,'&lt;')
@@ -325,6 +342,13 @@ function esc(s) {
 
 /* ── Init ─────────────────────────────────────────────────────────────────── */
 window.addEventListener('load', () => {
-  document.getElementById('base-url').textContent = API;
+  // Thème sauvegardé
+  const savedTheme = localStorage.getItem('mm-theme') || 'dark';
+  setTheme(savedTheme);
+  // Base URL
+  setText('base-url', API);
+  // Démarrer
   startDashboard();
+  // Init mounts
+  if (typeof Mounts !== 'undefined') Mounts.init();
 });
