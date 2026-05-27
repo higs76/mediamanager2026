@@ -294,7 +294,7 @@ def get_dashboard():
             "watcher": {
                 "name": "Watcher Service",
                 "status": "running" if watcher_running else "stopped",
-                "uptime": "unknown",  # TODO: calculer uptime réel
+                "uptime": get_app_uptime(),
                 "pid": os.getpid()
             },
             "database": {
@@ -314,6 +314,7 @@ def get_dashboard():
         "system": {
             "host": get_hostname(),
             "ip": get_local_ip(),
+            "start_time": get_system_boot_time(),
             "mount_base_path": str(MOUNT_BASE_PATH)
         }
     })
@@ -690,7 +691,9 @@ def get_system_boot_time() -> str:
 def get_app_uptime() -> str:
     """
     Duree depuis le demarrage de l'application.
-    Retourne : "2j 3h 14min" ou "45min" ou "12s"
+    < 60s   → "42s"
+    < 60min → "14min"
+    sinon   → "2h05" ou "3 jours 5h07"
     """
     delta         = datetime.now() - APP_START_TIME
     total_seconds = int(delta.total_seconds())
@@ -698,14 +701,15 @@ def get_app_uptime() -> str:
     hours   = (total_seconds % 86400) // 3600
     minutes = (total_seconds % 3600) // 60
     seconds = total_seconds % 60
-    if days > 0:
-        return f"{days}j {hours}h {minutes}min"
-    elif hours > 0:
-        return f"{hours}h {minutes}min"
-    elif minutes > 0:
-        return f"{minutes}min"
-    else:
+ 
+    if total_seconds < 60:
         return f"{seconds}s"
+    elif total_seconds < 3600:
+        return f"{minutes}min"
+    elif days > 0:
+        return f"{days} jours {hours}h{minutes:02d}"
+    else:
+        return f"{hours}h{minutes:02d}"
 
 # ==========================================
 # Main

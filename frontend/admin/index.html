@@ -30,15 +30,21 @@
       </button>
       <button class="nav-item" data-tab="logs" onclick="switchTab('logs')">
         <i class="bi bi-terminal"></i> Logs
-      </button>
-      <button class="nav-item nav-right-item" data-tab="api" onclick="switchTab('api')">
-        <i class="bi bi-code-slash"></i> API
-      </button>
+      </button>      
     </div>
-
   </div>
 
   <div class="nav-right">
+    <button class="nav-item nav-right-item" data-tab="api" onclick="switchTab('api')">
+     <i class="bi bi-code-slash"></i> API
+    </button>
+    
+    <!-- Infos système -->
+    <div class="host-info">
+      <span class="green-dot" id="conn-dot"></span>
+      <span>Host : <strong id="sys-host">—</strong></span>
+    </div>
+
     <!-- Thème -->
     <div class="theme-selector">
       <button class="theme-btn" id="theme-btn-light" onclick="setTheme('light')" title="Thème clair">
@@ -52,15 +58,6 @@
       </button>
     </div>
 
-    <!-- Infos système -->
-    <div class="host-info">
-      <span class="green-dot" id="conn-dot"></span>
-      <span>Host : <strong id="sys-host">—</strong></span>
-    </div>
-    <span>IP : <strong id="sys-ip">—</strong></span>    
-    <button class="refresh-btn" onclick="refreshHeader()" title="Actualiser">
-      <i class="bi bi-arrow-clockwise"></i>
-    </button>
   </div>
 </nav>
 

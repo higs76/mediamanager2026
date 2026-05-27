@@ -69,8 +69,38 @@ check_environment() {
         log_warn "Not running Ubuntu 24.04 (found: $VERSION_ID). This might not work."
     fi
     
+    
+    
     log_success "Environment check passed"
 }
+
+# ==========================================
+# Configurer automatiquement la zone horaire
+# ==========================================
+
+setup_timezone() {
+    log_info "Configuring system timezone to Europe/Paris..."
+
+    # Tentative de détection automatique par l'IP publique du serveur
+    # (très pratique pour un utilisateur au Canada, en Belgique, etc.)
+    TIMEZONE=$(curl -s --max-time 3 https://ipapi.co/timezone/ || true)
+    
+    # Si la détection a échoué (pas d'internet, api en panne), on met Paris par défaut
+    if [ -z "$TIMEZONE" ] || [[ "$TIMEZONE" == *"Error"* ]]; then
+        log_warn "Could not detect timezone automatically. Defaulting to Europe/Paris."
+        TIMEZONE="Europe/Paris"
+    fi
+    
+    echo "$TIMEZONE" > /etc/timezone
+    ln -fs /usr/share/zoneinfo/$TIMEZONE /etc/localtime
+    dpkg-reconfigure -f noninteractive tzdata
+
+    log_success "Timezone Europe/Paris applied (Current date: $(date))"
+
+}
+
+
+
 
 # ==========================================
 # Mettre à jour le système
@@ -378,6 +408,7 @@ main() {
     
     check_environment
     update_system
+    setup_timezone
     install_dependencies
     create_user
     create_directories

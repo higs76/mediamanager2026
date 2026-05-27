@@ -77,6 +77,8 @@ function renderDashCards(d) {
         <span class="card-value" style="font-size:.82rem">${d.system?.start_time ?? '—'}</span></div>
       <div class="card-row"><span class="card-label">IP</span>
         <span class="card-value" style="color:var(--blue)">${d.system?.ip ?? '—'}</span></div>
+      <div class="card-row"><span class="card-label">Host</span>
+        <span class="card-value">${d.system?.host ?? '—'}</span></div>
     </div>
  
     <!-- Watcher -->
@@ -171,8 +173,7 @@ async function refreshHeader() {
     const r = await fetch(`${API}/api/admin/dashboard`);
     const d = await r.json();
     setText('sys-host', d.system?.host ?? '—');
-    setText('sys-ip',   d.system?.ip   ?? '—');
-    
+        
     setVersion(d.version, d.latest_version, d.build, d.update_available?.prerelease);
   } catch (_) {}
 }
