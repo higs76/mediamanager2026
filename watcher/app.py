@@ -557,28 +557,43 @@ def get_latest_github_version() -> dict:
     
 def compare_versions(current: str, latest: str) -> dict:
     """
-    Compare deux versions et retourne l'info
-    Retourne: {"has_update": bool, "current": str, "latest": str}
+    Compare deux versions et retourne l'info de mise a jour.
+ 
+    N'utilise PAS packaging.version car il normalise les versions custom :
+      "0.3.2-dev" → "0.3.2.dev0"  ← indésirable
+ 
+    Comparaison manuelle sur les parties numeriques uniquement.
+    Le suffixe (-dev, -beta, -rc) est ignore pour la comparaison
+    mais conserve tel quel dans les champs retournes.
     """
+    def _numeric_parts(v: str) -> tuple:
+        # Retirer le prefixe "v" eventuel et tout ce qui suit le premier tiret
+        # "0.3.2-dev" → (0, 3, 2)  /  "v1.2.0" → (1, 2, 0)
+        clean = v.lstrip("v").split("-")[0].split(".")
+        try:
+            return tuple(int(x) for x in clean)
+        except ValueError:
+            return (0,)
+ 
     try:
-        current_v = version.parse(current)
-        latest_v = version.parse(latest)
-        
-        has_update = latest_v > current_v
-        
+        current_parts = _numeric_parts(current)
+        latest_parts  = _numeric_parts(latest)
+        has_update    = latest_parts > current_parts
+ 
         return {
-            "has_update": has_update,
-            "current": str(current_v),
-            "latest": str(latest_v),
-            "message": f"Update available: {current} → {latest}" if has_update else "You are up to date"
+            "has_update":  has_update,
+            "current":     current,   # conserve le format original
+            "latest":      latest,    # conserve le format original
+            "message":     f"Update available: {current} → {latest}" if has_update else "You are up to date",
+            "latest_url":  None       # sera rempli par l'appelant si besoin
         }
     except Exception as e:
         return {
             "has_update": False,
-            "current": current,
-            "latest": latest,
-            "error": str(e)
-        }    
+            "current":    current,
+            "latest":     latest,
+            "error":      str(e)
+        }
 
 # ==========================================
 # HELPER FUNCTIONS
