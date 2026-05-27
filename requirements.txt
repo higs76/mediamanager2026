@@ -1,3 +1,4 @@
+# MediaManager 2026 - Dépendances Python
 python-dotenv
 psycopg2-binary
 sqlalchemy
@@ -11,4 +12,3 @@ watchdog
 pytest
 pytest-asyncio
 python-json-logger
-packaging>=21.0

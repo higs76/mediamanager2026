@@ -1,194 +1,191 @@
 # MediaManager 2026
 
-Service de gestion des fichiers vidéo : détection, analyse, organisation et renommage intelligent.
+Service de gestion de fichiers vidéo : surveillance des NAS, détection,
+analyse et organisation automatique.
 
-## Vue d'ensemble
+## Identifiants par défaut après installation
 
-MediaManager 2026 est composé de deux services :
+| Élément | Valeur |
+|---|---|
+| Utilisateur système | `mediamanager` |
+| Mot de passe système | `mediamanager` |
+| Utilisateur PostgreSQL | `mediamanager` |
+| Mot de passe PostgreSQL | `mediamanager` |
+| Base de données | `mediamanager_db` |
 
-1. **Watcher Service** : surveillance 24/24 des dossiers NAS, détection de fichiers, extraction de métadonnées
-2. **User App** : interface de consultation, validation des renommages, gestion contexte (vu/résumés)
+> ⚠️ À changer en production :
+> ```bash
+> passwd mediamanager
+> sudo -u postgres psql -c "ALTER USER mediamanager PASSWORD 'nouveaumdp';"
+> # Mettre à jour DATABASE_URL dans /home/mediamanager/app/.env
+> ```
 
-## Architecture
-```
-PC/VM (Développement)
-  └── VS Code (code Python)
+---
 
-Proxmox (Infra)
-  ├── VM Dev (développement/test)
-  └── VM Prod (futur)
-    ├── PostgreSQL (BD)
-    ├── Watcher Service (Python/FastAPI)
-    └── MediaManagerMnt/ (montages SMB)
-```
+## Installation sur Proxmox (LXC)
 
-## Prérequis
+### Méthode recommandée — script automatique
 
-- Python 3.11+
-- PostgreSQL 13+
-- Git
-- ffprobe/mediainfo (pour analyse vidéo)
-- Accès SMB aux NAS Synology
+Sur le **host Proxmox** :
 
-## Installation
-
-### 1. Cloner le repo
 ```bash
-cd C:\devs\Repos
-git clone https://github.com/higs76/mediamanager2026.git
-cd mediamanager2026
+bash <(curl -fsSL https://raw.githubusercontent.com/higs76/mediamanager2026/main/scripts/mediamanager-proxmox.sh)
 ```
 
-### 2. Créer l'environnement Python
+Ce script :
+- Crée et configure le LXC Ubuntu 24.04
+- Détecte automatiquement la branche depuis le fichier `VERSION`
+  - `VERSION` sans suffixe → installe depuis `main` (stable)
+  - `VERSION` avec `-dev` → installe depuis `dev`
+- Lance `proxmox-install.sh` à l'intérieur du LXC
+
+### Installation manuelle dans un LXC existant
+
 ```bash
-python -m venv venv
-source venv/bin/activate  # Linux/Mac
-# ou sur Windows :
-venv\Scripts\activate
-
-pip install -r requirements.txt
+bash <(curl -fsSL https://raw.githubusercontent.com/higs76/mediamanager2026/main/scripts/proxmox-install.sh)
 ```
 
-### 3. Configurer l'environnement
+---
+
+## Accès après installation
+
+| Service | URL |
+|---|---|
+| Interface admin | `http://<IP_LXC>:8000/admin/` |
+| API REST | `http://<IP_LXC>:8000` |
+| Documentation API | `http://<IP_LXC>:8000/docs` |
+
+---
+
+## Gestion du service
+
 ```bash
-cp .env.example .env
-# Éditez .env avec vos paramètres
+# Statut
+systemctl status mediamanager-watcher
+
+# Redémarrage
+sudo systemctl restart mediamanager-watcher
+
+# Logs en temps réel
+journalctl -u mediamanager-watcher -f
 ```
 
-### 4. Initialiser la BD
+---
 
-Sur la VM Proxmox Linux :
+## Mise à jour
+
+### Via l'interface admin
+Bouton **⬆ Màj** dans le header → « Lancer la mise à jour »
+
+Le service fait un `git pull` et redémarre automatiquement.
+
+### Via ligne de commande
 ```bash
-python scripts/deploy.py --setup
-# ou pas à pas :
-python scripts/deploy.py --create-db
-python scripts/deploy.py --init-tables
+cd /home/mediamanager/app
+git pull
+sudo systemctl restart mediamanager-watcher
 ```
 
-## Démarrage
-
-### Watcher Service
-```bash
-python -m watcher.app
-# ou
-python watcher/app.py
-```
-
-API disponible sur : http://localhost:8000
-
-Endpoints :
-- `GET /health` : health check
-- `GET /status` : statut du service
-- `GET /config` : configuration (debug)
-
-### Tests
-```bash
-pytest
-```
-
-## Structure du projet
-```
-mediamanager2026/
-├── watcher/              # Service watcher principal
-│   ├── app.py           # Point d'entrée
-│   ├── config.py        # Configuration
-│   ├── database.py      # Connexion BD
-│   ├── monitor.py       # Surveillance fichiers
-│   ├── analyzer.py      # Analyse métadonnées
-│   └── api.py           # Endpoints additionnels
-├── database/            # Gestion BD
-│   ├── schema.sql       # Structure BD
-│   └── init_db.py       # Initialisation
-├── scripts/             # Scripts utilitaires
-│   ├── deploy.py        # Déploiement et setup
-│   ├── backup_db.sh     # Backup BD
-│   └── restore_db.sh    # Restauration BD
-├── tests/               # Tests unitaires
-├── docker/              # Dockerisation (futur)
-├── config/              # Fichiers config
-└── logs/                # Logs du service
-```
-
-## Déploiement
-
-### Setup complet
-```bash
-python scripts/deploy.py --setup
-```
-
-### Opérations individuelles
-```bash
-# Créer la BD
-python scripts/deploy.py --create-db
-
-# Initialiser les tables
-python scripts/deploy.py --init-tables
-
-# Vérifier l'installation
-python scripts/deploy.py --check
-
-# Backup BD
-python scripts/deploy.py --backup
-
-# Restaurer BD
-python scripts/deploy.py --restore backup_file.sql
-```
+---
 
 ## Configuration
 
-### Variables d'environnement (.env)
+Fichier : `/home/mediamanager/app/.env`
+
+| Variable | Description | Défaut |
+|---|---|---|
+| `DATABASE_URL` | URL PostgreSQL | `postgresql://mediamanager:...` |
+| `API_HOST` | IP d'écoute | `0.0.0.0` |
+| `API_PORT` | Port API | `8000` |
+| `MOUNT_BASE_PATH` | Dossier racine des montages | `/home/mediamanager/MediaManagerMnt` |
+| `ALLOW_PRERELEASE` | Voir les pre-releases (dev uniquement) | `false` |
+
+---
+
+## Structure du projet
+
 ```
-DATABASE_URL=postgresql://mediamanager:password@localhost:5432/mediamanager_db
-API_HOST=0.0.0.0
-API_PORT=8000
-API_DEBUG=False
-MOUNT_BASE_PATH=/home/mediamanager/MediaManagerMnt
+mediamanager2026/
+├── watcher/                  # Service principal
+│   ├── app.py               # Application FastAPI + démarrage
+│   ├── api.py               # Endpoints admin (montages, sync, update)
+│   ├── config.py            # Configuration depuis .env
+│   └── database.py          # Connexion SQLAlchemy
+├── database/
+│   └── schema.sql           # Structure des tables (appliqué auto au démarrage)
+├── frontend/admin/          # Interface web d'administration
+│   ├── index.html           # Shell HTML
+│   ├── admin.css            # Styles (thèmes dark/light/auto)
+│   ├── admin.js             # Dashboard, logs, API, versioning
+│   └── mounts.js            # Gestion des montages NAS
+├── scripts/
+│   ├── mediamanager-proxmox.sh      # Création du LXC sur Proxmox
+│   ├── proxmox-install.sh           # Installation dans le LXC
+│   └── mediamanager-watcher.service # Unité systemd
+├── tests/                   # Tests (à développer)
+├── run.py                   # Point d'entrée uvicorn
+├── .env.example             # Template de configuration
+└── VERSION                  # Version actuelle (ex: 0.4.0)
 ```
 
-### Dossiers NAS
+---
 
-Structure des montages :
-```
-MediaManagerMnt/
-├── series/
-│   ├── 1-series/         → //nas1/series
-│   └── 2-series/         → //nas2/series
-├── films/
-│   ├── 1-films/          → //nas1/films
-│   └── 2-films/          → //nas3/films
-├── animes/
-├── documentaires/
-```
+## Base de données
 
-## Développement
+Les tables sont créées automatiquement au démarrage depuis `database/schema.sql`.
+Aucune action manuelle nécessaire.
 
-### Ajouter une dépendance
+Tables principales :
+- `categories` — types de médias (séries, films, animés…)
+- `mounts` — montages NAS (header commun SMB/NFS)
+- `mount_smb` — paramètres spécifiques SMB/CIFS
+- `mount_nfs` — paramètres spécifiques NFS
+- `files` — fichiers détectés
+- `video_metadata` — métadonnées vidéo (Phase 2)
+- `rename_proposals` — propositions de renommage (Phase 3)
+
+---
+
+## Versioning
+
+| Suffixe | Branche | Visibilité |
+|---|---|---|
+| `0.4.0` | `main` | Tous les utilisateurs |
+| `0.4.0-dev` | `dev` | Développeur uniquement (`ALLOW_PRERELEASE=true`) |
+
+### Publier une nouvelle version
+
 ```bash
-pip install package_name
-pip freeze > requirements.txt
+# Branche dev → test
+git tag v0.4.0-dev
+git push origin v0.4.0-dev
+# Sur GitHub : Create release → cocher "Pre-release"
+
+# Branche main → release stable
+git checkout main && git merge dev
+echo "0.4.0" > VERSION
+git tag v0.4.0
+git push origin main && git push origin v0.4.0
+# Sur GitHub : Create release → NE PAS cocher "Pre-release"
+git checkout dev && git merge main
 ```
 
-### Créer une migration BD
-```bash
-# Ajouter un fichier dans database/migrations/
-# Exécuter manuellement avec psql
-```
-
-## Logs
-
-Les logs sont stockés dans `logs/mediamanager.log` et affichés en console.
+---
 
 ## Roadmap
 
-- [ ] Phase 1 : Watcher fiable
-- [ ] Phase 2 : Extraction métadonnées
-- [ ] Phase 3 : Moteur règles renommage
-- [ ] Phase 4 : Interface utilisateur (Web/Desktop)
+- [x] Phase 1 — Watcher fiable + gestion montages NAS (SMB/NFS)
+- [x] Interface admin (dashboard, logs, API, thèmes)
+- [x] Mise à jour automatique via GitHub
+- [ ] Phase 2 — Extraction métadonnées vidéo (ffprobe/mediainfo)
+- [ ] Phase 3 — Moteur de règles de renommage
+- [ ] Phase 4 — Interface utilisateur finale
 
-## Support
+---
 
-Pour les erreurs, consultez `logs/mediamanager.log`
+## Prérequis techniques
 
-## Licence
-
-À définir
+- Proxmox VE 7+ (pour l'installation LXC automatique)
+- Python 3.12+
+- PostgreSQL 15+
+- Ubuntu 24.04 (dans le LXC)
