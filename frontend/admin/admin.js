@@ -48,8 +48,7 @@ async function loadDashboard() {
     // Header système
     setText('sys-host', d.system?.host ?? '—');
     setText('sys-ip',   d.system?.ip   ?? '—');
-    setText('sys-time', new Date().toLocaleTimeString('fr-FR'));
-
+ 
     // Cartes statut
     renderDashCards(d);
 
@@ -75,13 +74,11 @@ function renderDashCards(d) {
     <div class="card">
       <div class="card-header"><i class="bi bi-pc-display-horizontal"></i> Système hôte</div>
       <div class="card-row"><span class="card-label">Démarré le</span>
-        <span class="card-value" style="font-size:.82rem;color:var(--blue)">${d.system?.start_time ?? '—'}</span></div>
-      <div class="card-row"><span class="card-label">Uptime</span>
-        <span class="badge badge-info"><span class="dot"></span>${d.system?.uptime ?? '—'}</span></div>
+        <span class="card-value" style="font-size:.82rem">${d.system?.start_time ?? '—'}</span></div>
       <div class="card-row"><span class="card-label">IP</span>
-        <span class="card-value">${d.system?.ip ?? '—'}</span></div>
+        <span class="card-value" style="color:var(--blue)">${d.system?.ip ?? '—'}</span></div>
     </div>
-
+ 
     <!-- Watcher -->
     <div class="card">
       <div class="card-header"><i class="bi bi-cpu"></i> Watcher Service</div>
@@ -89,10 +86,10 @@ function renderDashCards(d) {
         <span class="badge ${isRunning ? 'badge-success' : 'badge-danger'}">
           <span class="dot"></span>${isRunning ? 'Running' : 'Stopped'}
         </span></div>
+      <div class="card-row"><span class="card-label">Uptime</span>
+        <span class="badge badge-info"><span class="dot"></span>${watcher.uptime ?? '—'}</span></div>
       <div class="card-row"><span class="card-label">PID</span>
         <span class="card-value">${watcher.pid ?? '—'}</span></div>
-      <div class="card-row"><span class="card-label">Version</span>
-        <span class="card-value">${d.version ?? '—'}</span></div>
       <div class="card-actions">
         <button class="btn btn-sm" onclick="svcAction('watcher','restart')">
           <i class="bi bi-arrow-clockwise"></i> Restart
@@ -102,7 +99,7 @@ function renderDashCards(d) {
         </button>
       </div>
     </div>
-
+ 
     <!-- PostgreSQL -->
     <div class="card">
       <div class="card-header"><i class="bi bi-database"></i> PostgreSQL</div>
@@ -175,7 +172,7 @@ async function refreshHeader() {
     const d = await r.json();
     setText('sys-host', d.system?.host ?? '—');
     setText('sys-ip',   d.system?.ip   ?? '—');
-    setText('sys-time', new Date().toLocaleTimeString('fr-FR'));
+    
     setVersion(d.version, d.latest_version, d.build, d.update_available?.prerelease);
   } catch (_) {}
 }

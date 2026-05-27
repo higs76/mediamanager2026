@@ -15,6 +15,9 @@ import subprocess
 import requests
 from pathlib import Path
 from datetime import datetime
+# Heure de démarrage de l'app (pour uptime)
+APP_START_TIME = datetime.now()
+
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -652,6 +655,42 @@ def get_local_ip() -> str:
     except:
         return "unknown"
     
+
+def get_system_boot_time() -> str:
+    """
+    Date et heure de demarrage du systeme (pas de l'app).
+    Lit /proc/uptime pour calculer depuis l'epoch.
+    Retourne : "2026-05-28 08:32:14"
+    """
+    try:
+        import datetime as dt
+        with open("/proc/uptime") as f:
+            uptime_seconds = float(f.read().split()[0])
+        boot_time = datetime.now() - dt.timedelta(seconds=uptime_seconds)
+        return boot_time.strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return "—"
+ 
+ 
+def get_app_uptime() -> str:
+    """
+    Duree depuis le demarrage de l'application.
+    Retourne : "2j 3h 14min" ou "45min" ou "12s"
+    """
+    delta         = datetime.now() - APP_START_TIME
+    total_seconds = int(delta.total_seconds())
+    days    = total_seconds // 86400
+    hours   = (total_seconds % 86400) // 3600
+    minutes = (total_seconds % 3600) // 60
+    seconds = total_seconds % 60
+    if days > 0:
+        return f"{days}j {hours}h {minutes}min"
+    elif hours > 0:
+        return f"{hours}h {minutes}min"
+    elif minutes > 0:
+        return f"{minutes}min"
+    else:
+        return f"{seconds}s"
 
 # ==========================================
 # Main
