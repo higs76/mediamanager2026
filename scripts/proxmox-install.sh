@@ -181,6 +181,18 @@ SUDOEOF
     fi
     systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
     log_success "SSH password authentication enabled"
+ 
+    # Installer la cle SSH publique si fournie
+    # Permet la connexion sans mot de passe (deploiement depuis VSCode, etc.)
+    if [ -n "${SSH_PUBLIC_KEY}" ]; then
+        log_info "Installing SSH public key for mediamanager..."
+        mkdir -p /home/mediamanager/.ssh
+        echo "${SSH_PUBLIC_KEY}" >> /home/mediamanager/.ssh/authorized_keys
+        chmod 700 /home/mediamanager/.ssh
+        chmod 600 /home/mediamanager/.ssh/authorized_keys
+        chown -R mediamanager:mediamanager /home/mediamanager/.ssh
+        log_success "SSH public key installed"
+    fi
 
 }
 

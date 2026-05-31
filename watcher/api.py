@@ -741,3 +741,23 @@ def trigger_update():
         "new_version": results.get("new_version"),
         "message":     message
     })
+
+# ── Force check version ───────────────────────────────────────────────────────
+ 
+@router.get("/version/check")
+def force_version_check():
+    """
+    Force une nouvelle verification de version en vidant le cache.
+    Utile en developpement pour ne pas attendre les 30 minutes.
+    Appele quand l'utilisateur clique sur le numero de version dans le header.
+    """
+    try:
+        from watcher.app import get_latest_github_version
+        # Vider le cache pour forcer un appel GitHub immediat
+        if hasattr(get_latest_github_version, "_cache"):
+            del get_latest_github_version._cache
+            logger.info("Cache de version invalide (force check)")
+        return JSONResponse({"success": True, "message": "Cache vide - prochain appel dashboard retournera la version fraiche"})
+    except Exception as e:
+        logger.error(f"force_version_check: {e}")
+        raise HTTPException(500, str(e))

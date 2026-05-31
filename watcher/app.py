@@ -239,48 +239,50 @@ def health_check():
 
 @app.get("/api/admin/dashboard")
 def get_dashboard():
-    """
-    Retourne le dashboard complet pour l'Admin Panel
-    - Version app
-    - Statut des services
-    - Statut de la BD
-    - Statut des montages
-    """
-    # Récupérer la version de GitHub
-    github_version = get_latest_github_version()
+    """Retourne le dashboard complet pour l'Admin Panel."""
+
+    # Infos git (branche + hash commit local)
+    git_info = get_git_info()
+
+    # Version GitHub — mode dev (hash) ou prod (release)
+    github_info  = get_latest_github_version()
     version_info = {}
-    
-    if github_version["error"] is None:
-        version_info = compare_versions(APP_VERSION, github_version["version"])
-        version_info["latest_url"] = github_version["url"]
-    else:
+
+    if github_info.get("mode") == "dev":
         version_info = {
-            "has_update": False,
-            "current": APP_VERSION,
-            "error": github_version["error"]
+            "has_update": github_info.get("has_update", False),
+            "current":    git_info.get("commit", "unknown"),
+            "latest":     github_info.get("commit"),
+            "mode":       "dev",
+            "prerelease": True,
+            "message":    github_info.get("message", ""),
         }
+        latest_version = github_info.get("commit") if github_info.get("has_update") else None
+    else:
+        if github_info.get("error") is None and github_info.get("version"):
+            version_info = compare_versions(APP_VERSION, github_info["version"])
+            version_info["latest_url"]  = github_info.get("url")
+            version_info["prerelease"]  = False
+        else:
+            version_info = {
+                "has_update": False,
+                "current":    APP_VERSION,
+                "prerelease": False,
+                "error":      github_info.get("error", "")
+            }
+        latest_version = version_info.get("latest") if version_info.get("has_update") else None
 
     # Test connexion BD
     db_ok = test_db_connection()
-    
-    # Statut watcher (on considère qu'il tourne si on reçoit cette requête)
-    watcher_running = True  # TODO: vérifier le PID du process réel
-    
+
+    # Statut watcher — si on reçoit la requête, il tourne
+    watcher_running = True
+
     # Statut PostgreSQL
     postgres_running = check_postgres_running()
 
     # Statut montages
     mounts_info = get_mounts_info()
-    git_info    = get_git_info()
-
-    # Mode dev : latest_version = hash du dernier commit
-    # Mode prod : latest_version = tag de la derniere Release
-    github_info = get_latest_github_version()
-
-    if github_info.get("mode") == "dev":
-        latest_version = github_info.get("commit") if github_info.get("has_update") else None
-    else:
-        latest_version = version_info.get("latest") if version_info.get("has_update") else None
 
     
     return JSONResponse({

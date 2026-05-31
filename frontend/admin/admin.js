@@ -189,6 +189,28 @@ async function checkVersion() {
   versionTimer = setTimeout(checkVersion, 30 * 60 * 1000);
 }
 
+async function forceVersionCheck() {
+  const badge = document.getElementById('app-version');
+  const orig  = badge.textContent;
+  badge.textContent = '…';
+  badge.style.opacity = '0.5';
+  try {
+    // 1. Vider le cache serveur
+    await fetch(`${API}/api/admin/version/check`);
+    // 2. Relire le dashboard avec la version fraiche
+    const r = await fetch(`${API}/api/admin/dashboard`);
+    const d = await r.json();
+    setVersion(d.version, d.latest_version, d.build, d.update_available?.prerelease);
+    // 3. Réarmer le timer 30min depuis maintenant
+    clearTimeout(versionTimer);
+    versionTimer = setTimeout(checkVersion, 30 * 60 * 1000);
+  } catch (_) {
+    badge.textContent = orig;
+  } finally {
+    badge.style.opacity = '';
+  }
+}
+
 function setVersion(current, latest, build, isPrerelease) {
   // Afficher version + hash court : "0.3.2-dev (a1b2c3)"
   const display = build && build !== 'unknown'

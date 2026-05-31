@@ -14,9 +14,12 @@
   <div class="nav-left">
 
     <!-- Brand -->
-    <div class="brand">
+        <div class="brand">
       <span class="brand-name">MM2026</span>
-      <span class="brand-tag" id="app-version">—</span>
+      <span class="brand-tag" id="app-version"
+            onclick="forceVersionCheck()"
+            title="Cliquer pour vérifier maintenant"
+            style="cursor:pointer">—</span>
       <span class="update-badge" id="update-badge" onclick="triggerUpdate()">
         <i class="bi bi-arrow-up-circle"></i>
         <span id="update-label">Màj</span>
