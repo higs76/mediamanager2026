@@ -15,8 +15,9 @@ logger = logging.getLogger(__name__)
 # NullPool = pas de pool de connexions (utile pour dev/test)
 engine = create_engine(
     DATABASE_URL,
-    echo=False,  # Met à True pour voir les requêtes SQL
-    poolclass=NullPool
+    echo=False,
+    poolclass=NullPool,
+    connect_args={"client_encoding": "utf8"}
 )
 
 # Créer une session factory

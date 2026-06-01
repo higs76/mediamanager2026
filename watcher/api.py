@@ -298,8 +298,11 @@ def create_mount(payload: MountCreate):
     except HTTPException:
         raise
     except Exception as e:
+        err = str(e)
+        if "uq_smb_source" in err or "uq_nfs_source" in err:
+            raise HTTPException(400, "Cette source est déjà utilisée par un autre montage")
         logger.error(f"create_mount: {e}")
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, err)
 
 
 @router.put("/mounts/{mount_id}")
@@ -352,9 +355,11 @@ def update_mount(mount_id: int, payload: MountUpdate):
     except HTTPException:
         raise
     except Exception as e:
+        err = str(e)
+        if "uq_smb_source" in err or "uq_nfs_source" in err:
+            raise HTTPException(400, "Cette source est déjà utilisée par un autre montage")
         logger.error(f"update_mount: {e}")
-        raise HTTPException(500, str(e))
-
+        raise HTTPException(500, err)
 
 @router.delete("/mounts/{mount_id}", status_code=204)
 def delete_mount(mount_id: int):
@@ -564,6 +569,9 @@ def sync_mounts():
                     conn.execute(text(
                         "UPDATE mounts SET last_mount_at=NOW(), last_error=NULL WHERE id=:id"
                     ), {"id": mount_id})
+                    # Scan prioritaire : le disque est maintenant disponible
+                    from watcher.scanner import scan_queue
+                    scan_queue.enqueue_priority(mount_id)
                 else:
                     report["errors"].append({"path": local_path, "error": err})
                     logger.error(f"sync: échec montage {local_path} : {err}")
@@ -760,4 +768,92 @@ def force_version_check():
         return JSONResponse({"success": True, "message": "Cache vide - prochain appel dashboard retournera la version fraiche"})
     except Exception as e:
         logger.error(f"force_version_check: {e}")
+        raise HTTPException(500, str(e))
+    
+# ── Purge (développement) ─────────────────────────────────────────────────────
+
+@router.delete("/purge")
+def purge_scan_data():
+    """
+    Supprime tous les fichiers détectés et l'historique des scans.
+    Bouton de développement — l'action sera affinée au fil des avancées.
+    """
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("TRUNCATE TABLE media_files, scan_jobs RESTART IDENTITY CASCADE"))
+            conn.commit()
+        logger.info("Purge effectuée : media_files + scan_jobs vidés")
+        return JSONResponse({"success": True, "message": "Données de scan supprimées"})
+    except Exception as e:
+        logger.error(f"purge: {e}")
+        raise HTTPException(500, str(e))    
+    
+# ── Fichiers & Stats ──────────────────────────────────────────────────────────
+
+@router.get("/files/stats")
+def files_stats():
+    """
+    Retourne les compteurs de fichiers pour le dashboard.
+    - Par statut global (new, known, missing, duplicate)
+    - Par catégorie avec leur nombre de fichiers
+    - Historique du dernier scan par montage
+    """
+    try:
+        with engine.connect() as conn:
+
+            # Compteurs globaux par statut
+            rows = conn.execute(text("""
+                SELECT status, COUNT(*) as cnt
+                FROM media_files
+                GROUP BY status
+            """)).fetchall()
+            by_status = {r[0]: r[1] for r in rows}
+            total     = sum(by_status.values())
+            # "traités" = known, "en attente" = new
+            known     = by_status.get("known", 0)
+            new_files = by_status.get("new", 0)
+            missing   = by_status.get("missing", 0)
+            duplicate = by_status.get("duplicate", 0)
+
+            # Compteurs par catégorie
+            cat_rows = conn.execute(text("""
+                SELECT c.name, COUNT(f.id) as cnt
+                FROM categories c
+                LEFT JOIN mounts m ON m.category_id = c.id
+                LEFT JOIN media_files f ON f.mount_id = m.id
+                GROUP BY c.name
+                ORDER BY c.name
+            """)).fetchall()
+            by_category = [{"name": r[0], "count": r[1]} for r in cat_rows]
+
+            # Dernier scan job par montage
+            last_scans = conn.execute(text("""
+                SELECT DISTINCT ON (mount_id)
+                    mount_id, status, started_at, finished_at,
+                    files_found, files_new, files_updated, files_missing
+                FROM scan_jobs
+                ORDER BY mount_id, created_at DESC
+            """)).fetchall()
+            scans = [{
+                "mount_id":      r[0],
+                "status":        r[1],
+                "started_at":    str(r[2]) if r[2] else None,
+                "finished_at":   str(r[3]) if r[3] else None,
+                "files_found":   r[4],
+                "files_new":     r[5],
+                "files_updated": r[6],
+                "files_missing": r[7],
+            } for r in last_scans]
+
+        return JSONResponse({
+            "total":       total,
+            "known":       known,
+            "new":         new_files,
+            "missing":     missing,
+            "duplicate":   duplicate,
+            "by_category": by_category,
+            "last_scans":  scans,
+        })
+    except Exception as e:
+        logger.error(f"files_stats: {e}")
         raise HTTPException(500, str(e))

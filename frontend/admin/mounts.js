@@ -280,6 +280,9 @@ const Mounts = (() => {
 
   function _resetForm() {
     _selType = null;
+    // Cacher l'erreur précédente
+    const errEl = document.getElementById('modal-mount-error');
+    if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
     const active = document.getElementById('f-active');
     if (active) active.checked = true;
     _setVal('f-cat-select', '');
@@ -446,7 +449,17 @@ const Mounts = (() => {
         '<i class="bi bi-exclamation-triangle"></i> Modifications non appliquées',
         'Cliquer sur « Appliquer & Synchro » pour monter / démonter les partages.');
     } catch (e) {
-      alert('Erreur : ' + e.message);
+      // Afficher l'erreur dans le modal, pas en alert
+      const errEl = document.getElementById('modal-mount-error');
+      if (errEl) {
+        // L'API retourne souvent du JSON : extraire le message lisible
+        let msg = e.message;
+        try { msg = JSON.parse(e.message); } catch (_) {}
+        errEl.textContent = typeof msg === 'string' ? msg : JSON.stringify(msg);
+        errEl.style.display = 'block';
+      } else {
+        alert('Erreur : ' + e.message);
+      }
     } finally {
       btn.disabled = false;
       btn.innerHTML = '<i class="bi bi-check2"></i> Enregistrer';

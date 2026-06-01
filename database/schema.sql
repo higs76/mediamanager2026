@@ -2,6 +2,25 @@
 -- MediaManager 2026 - Database Schema
 -- ==========================================
 
+CREATE TABLE IF NOT EXISTS config (
+    key         VARCHAR(100) PRIMARY KEY,
+    value       TEXT NOT NULL,
+    description TEXT,
+    updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+INSERT INTO config (key, value, description) VALUES (
+    'video_extensions',
+    '.mkv;.mp4;.avi;.mov;.wmv;.ts;.m2ts;.iso;.m4v;.flv;.divx;.xvid;.mpg;.mpeg;.vob;.rmvb',
+    'Extensions de fichiers vidéo surveillées par le scanner (séparées par ;)'
+) ON CONFLICT (key) DO NOTHING;
+
+INSERT INTO config (key, value, description) VALUES (
+    'scan_interval_hours',
+    '6',
+    'Intervalle en heures entre deux scans périodiques automatiques'
+) ON CONFLICT (key) DO NOTHING;
+
 -- ============================================================
 -- TABLE: categories
 -- Types de médias définis par l'utilisateur.
@@ -14,11 +33,6 @@ CREATE TABLE IF NOT EXISTS categories (
    name       VARCHAR(100) NOT NULL UNIQUE,  -- ex: series, films, animes
    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
-
--- Catégories par défaut
---INSERT INTO categories (name) VALUES
---('series'), ('films'), ('animes'), ('documentaires')
---ON CONFLICT (name) DO NOTHING;
 
 -- ============================================================
 -- TABLE: mounts
@@ -72,21 +86,50 @@ CREATE TABLE IF NOT EXISTS mount_nfs (
     mount_options VARCHAR(500) DEFAULT 'rw,soft,timeo=30'
 );
 
+
 -- ==========================================
--- TABLE: files
--- Fichiers détectés
+-- TABLE: media_files
+-- Fichiers vidéo détectés sur les montages.
+-- Lié au montage par mount_id (stable même si renommage).
+-- Le hash_partial garantit qu'un fichier n'est jamais
+-- enregistré deux fois même s'il est renommé ou déplacé.
 -- ==========================================
-CREATE TABLE IF NOT EXISTS files (
-    id SERIAL PRIMARY KEY,
-    mount_id INTEGER REFERENCES mounts(id) ON DELETE CASCADE,
-    filename VARCHAR(500) NOT NULL,
-    file_path VARCHAR(1000) NOT NULL,
-    file_size BIGINT,
-    file_hash VARCHAR(64),
-    detected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    status VARCHAR(50) DEFAULT 'pending',
-    UNIQUE(file_path)
+CREATE TABLE IF NOT EXISTS media_files (
+    id              SERIAL PRIMARY KEY,
+    mount_id        INTEGER NOT NULL REFERENCES mounts(id) ON DELETE CASCADE,
+    hash_partial    VARCHAR(64) NOT NULL,           -- SHA-256 sur début+fin+taille
+    path_relative   VARCHAR(1000) NOT NULL,         -- chemin depuis racine du montage
+    filename        VARCHAR(500) NOT NULL,           -- nom du fichier seul
+    extension       VARCHAR(20),                     -- .mkv, .mp4, .avi...
+    size_bytes      BIGINT NOT NULL,
+    status          VARCHAR(20) NOT NULL DEFAULT 'new'
+                    CHECK (status IN ('new','known','missing','duplicate')),
+    first_seen_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_seen_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(hash_partial, mount_id)   -- même fichier = même hash sur le même montage
 );
+
+
+-- ==========================================
+-- TABLE: scan_jobs
+-- Historique des scans de découverte.
+-- Un scan = un montage à un instant donné.
+-- ==========================================
+CREATE TABLE IF NOT EXISTS scan_jobs (
+    id              SERIAL PRIMARY KEY,
+    mount_id        INTEGER NOT NULL REFERENCES mounts(id) ON DELETE CASCADE,
+    status          VARCHAR(20) NOT NULL DEFAULT 'pending'
+                    CHECK (status IN ('pending','running','done','error')),
+    started_at      TIMESTAMP,
+    finished_at     TIMESTAMP,
+    files_found     INTEGER DEFAULT 0,   -- total fichiers vus sur disque
+    files_new       INTEGER DEFAULT 0,   -- nouveaux insérés
+    files_updated   INTEGER DEFAULT 0,   -- renommés/déplacés détectés
+    files_missing   INTEGER DEFAULT 0,   -- marqués missing
+    error_message   TEXT,
+    created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 
 -- ==========================================
 -- TABLE: video_metadata
@@ -94,7 +137,7 @@ CREATE TABLE IF NOT EXISTS files (
 -- ==========================================
 CREATE TABLE IF NOT EXISTS video_metadata (
     id SERIAL PRIMARY KEY,
-    file_id INTEGER REFERENCES files(id) ON DELETE CASCADE,
+    file_id INTEGER REFERENCES media_files(id) ON DELETE CASCADE,
     duration_seconds FLOAT,
     video_codec VARCHAR(50),
     video_bitrate BIGINT,
@@ -114,7 +157,7 @@ CREATE TABLE IF NOT EXISTS video_metadata (
 -- ==========================================
 CREATE TABLE IF NOT EXISTS rename_proposals (
     id SERIAL PRIMARY KEY,
-    file_id INTEGER REFERENCES files(id) ON DELETE CASCADE,
+    file_id INTEGER REFERENCES media_files(id) ON DELETE CASCADE,
     proposed_name VARCHAR(500) NOT NULL,
     category VARCHAR(50),
     confidence FLOAT,
@@ -140,12 +183,35 @@ CREATE TRIGGER trg_mounts_updated_at
     BEFORE UPDATE ON mounts
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
+DROP TRIGGER IF EXISTS trg_config_updated_at ON config;
+CREATE TRIGGER trg_config_updated_at
+    BEFORE UPDATE ON config
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
 -- ==========================================
 -- INDEXES pour performance
 -- ==========================================
 CREATE INDEX IF NOT EXISTS idx_mounts_category  ON mounts(category_id);
 CREATE INDEX IF NOT EXISTS idx_mounts_active    ON mounts(active);
-CREATE INDEX IF NOT EXISTS idx_files_mount      ON files(mount_id);
-CREATE INDEX IF NOT EXISTS idx_files_status ON files(status);
+CREATE INDEX IF NOT EXISTS idx_media_files_mount    ON media_files(mount_id);
+CREATE INDEX IF NOT EXISTS idx_media_files_status   ON media_files(status);
+CREATE INDEX IF NOT EXISTS idx_media_files_hash     ON media_files(hash_partial);
+CREATE INDEX IF NOT EXISTS idx_scan_jobs_mount      ON scan_jobs(mount_id);
+CREATE INDEX IF NOT EXISTS idx_scan_jobs_status     ON scan_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_metadata_file ON video_metadata(file_id);
 CREATE INDEX IF NOT EXISTS idx_proposals_file ON rename_proposals(file_id);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'uq_smb_source'
+    ) THEN
+        ALTER TABLE mount_smb ADD CONSTRAINT uq_smb_source UNIQUE (server, share);
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'uq_nfs_source'
+    ) THEN
+        ALTER TABLE mount_nfs ADD CONSTRAINT uq_nfs_source UNIQUE (server, export_path);
+    END IF;
+END $$;

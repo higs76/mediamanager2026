@@ -117,7 +117,7 @@ function renderDashCards(d) {
   `;
 }
 
-function updateDashStats(d) {
+async function updateDashStats(d) {
   const m = d.services?.mounts ?? {};
   const total   = m.total   ?? 0;
   const healthy = m.healthy ?? 0;
@@ -133,10 +133,48 @@ function updateDashStats(d) {
   const mBar = document.getElementById('stat-mounts-bar');
   if (mBar) mBar.style.width = mPct + '%';
 
-  // Catégories depuis Mounts si disponible
-  if (typeof Mounts !== 'undefined') {
-    const cats = [...new Set(Mounts._allMounts?.map(m => m.category_name).filter(Boolean) ?? [])];
-    setText('stat-categories-list', cats.length ? cats.join(', ') : '—');
+   // ── Fichiers — appel API dédié ──────────────────────────────────────────
+  try {
+    const r = await fetch(`${API}/api/admin/files/stats`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const f = await r.json();
+
+    const ftotal = f.total     ?? 0;
+    const fknown = f.known     ?? 0;
+    const fnew   = f.new       ?? 0;
+
+    // Barre de navigation (header)
+    setText('stat-files-ok',    fknown);
+    setText('stat-files-wait',  fnew);
+    setText('stat-files-total', ftotal);
+
+    // Panneau détail
+    const pct   = ftotal > 0 ? Math.round(fknown / ftotal * 100) : 0;
+    setText('stat-files-pct',   ftotal > 0 ? `${pct}% TRAITÉ` : '—');
+    setText('stat-files-label', `${ftotal} Fichier${ftotal > 1 ? 's' : ''} indexé${ftotal > 1 ? 's' : ''}`);
+    setText('stat-files-ok2',   fknown);
+    setText('stat-files-wait2', fnew);
+    const bar = document.getElementById('stat-files-bar');
+    if (bar) bar.style.width = (ftotal > 0 ? pct : 0) + '%';
+
+    // Catégories dans le header
+    const cats = f.by_category ?? [];
+    const catsWithFiles = cats.filter(c => c.count > 0);
+    const catEl = document.getElementById('stat-categories-list');
+    if (catEl) {
+      if (catsWithFiles.length === 0) {
+        catEl.innerHTML = '<span style="color:var(--muted)">—</span>';
+      } else {
+        catEl.innerHTML = catsWithFiles
+          .map(c => `<span style="color:var(--purple);font-weight:600">
+            ${esc(c.name.charAt(0).toUpperCase() + c.name.slice(1))} (${c.count})
+          </span>`)
+          .join('<span class="slash"> / </span>');
+      }
+    }
+
+  } catch (e) {
+    console.warn('files/stats:', e.message);
   }
 }
 

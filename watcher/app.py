@@ -170,6 +170,11 @@ async def lifespan(app: FastAPI):
     ensure_timezone()
     ensure_system_dependencies()
     init_database_tables()
+    # Démarrer la file de scans en arrière-plan
+    from watcher.scanner import scan_queue
+    scan_queue.start()
+    # Scanner tous les montages actifs au démarrage
+    scan_queue.enqueue_all_active()
     yield
     # Arrêt propre (rien à faire pour l'instant)
     logger.info("Arrêt du service MediaManager Watcher")
