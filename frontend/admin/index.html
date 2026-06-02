@@ -159,6 +159,9 @@
           <button class="btn btn-primary" onclick="Mounts._openAdd()">
             <i class="bi bi-plus-lg"></i> Ajouter
           </button>
+          <button class="btn btn-danger" onclick="confirmPurge()" title="Vide media_files et scan_jobs — dev uniquement">
+            <i class="bi bi-trash3"></i> Purge
+          </button>
         </div>
       </div>
 
@@ -179,7 +182,9 @@
               <th>Catégorie</th>
               <th>Type</th>
               <th>Source</th>
-              <th>Chemin local</th>
+              <th title="Chemin complet : /home/mediamanager/MediaManagerMnt/...">
+                CHEMIN LOCAL <i class="bi bi-info-circle" style="font-size:.75rem;opacity:.5"></i>
+              </th>
               <th>Statut</th>
               <th style="width:90px;text-align:center">Actions</th>
             </tr>
@@ -271,15 +276,181 @@
 
 </main>
 
-<!-- ══ MODAL : Ajout / Édition montage ══════════════════════════════════════ -->
+<!-- ══ MODAL : Wizard ajout montages ═══════════════════════════════════════ -->
 <div class="modal-overlay" id="overlay-mount">
-  <div class="modal">
+  <div class="modal modal-lg">
     <div class="modal-header">
-      <h3 id="modal-mount-title">Ajouter un montage</h3>
+      <div style="display:flex;flex-direction:column;gap:4px">
+        <h3 id="modal-mount-title">Ajouter des montages</h3>
+        <!-- Indicateur d'étapes -->
+        <div class="wizard-steps" id="wizard-steps">
+          <span class="wizard-step active" data-step="1">1. Serveur</span>
+          <i class="bi bi-chevron-right" style="font-size:.7rem;opacity:.4"></i>
+          <span class="wizard-step" data-step="2">2. Partages</span>
+          <i class="bi bi-chevron-right" style="font-size:.7rem;opacity:.4"></i>
+          <span class="wizard-step" data-step="3">3. Confirmation</span>
+        </div>
+      </div>
       <button class="modal-close" onclick="Mounts.closeMount()">&times;</button>
     </div>
     <div class="modal-body">
-      <!-- Type -->
+
+      <!-- ── Étape 1 : Serveur ─────────────────────────────────────────── -->
+      <div class="wizard-panel active" id="wizard-step-1">
+
+        <!-- Serveurs connus -->
+        <div class="form-group">
+          <label class="form-label">Serveur connu</label>
+          <select id="w-known-server" onchange="Mounts.wizardLoadKnown()">
+            <option value="">— Nouveau serveur —</option>
+          </select>
+          <span class="form-hint">Sélectionner un serveur déjà configuré pour pré-remplir les infos</span>
+        </div>
+
+        <!-- Type -->
+        <div class="form-group">
+          <label class="form-label">Type de montage <span class="req">*</span></label>
+          <div class="type-grid">
+            <div class="type-card active" data-type="smb" id="wtype-smb" onclick="Mounts.wizardSelectType('smb')">
+              <i class="bi bi-server"></i>
+              <div class="type-name">SMB / CIFS</div>
+              <div class="type-desc">NAS Synology, QNAP, Windows</div>
+            </div>
+            <div class="type-card" data-type="nfs" id="wtype-nfs" onclick="Mounts.wizardSelectType('nfs')">
+              <i class="bi bi-diagram-3"></i>
+              <div class="type-name">NFS</div>
+              <div class="type-desc">NAS Linux, Synology NFS</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Champs serveur SMB -->
+        <div id="wfields-smb">
+          <div class="form-grid">
+            <div class="form-group">
+              <label class="form-label">Serveur <span class="req">*</span></label>
+              <input id="w-server" type="text" placeholder="//DS1821 ou //192.168.1.10">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Version SMB</label>
+              <select id="w-smb-version">
+                <option value="3.0" selected>3.0 (recommandé)</option>
+                <option value="2.1">2.1</option>
+                <option value="2.0">2.0</option>
+                <option value="1.0">1.0 (ancien)</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-grid">
+            <div class="form-group">
+              <label class="form-label">Utilisateur</label>
+              <input id="w-username" type="text" placeholder="mediamanager">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Mot de passe</label>
+              <input id="w-password" type="password" placeholder="••••••••">
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Domaine</label>
+            <input id="w-domain" type="text" placeholder="WORKGROUP" value="WORKGROUP">
+          </div>
+        </div>
+
+        <!-- Champs serveur NFS -->
+        <div id="wfields-nfs" style="display:none">
+          <div class="form-grid">
+            <div class="form-group">
+              <label class="form-label">Serveur <span class="req">*</span></label>
+              <input id="w-nfs-server" type="text" placeholder="192.168.1.10 ou nas1">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Version NFS</label>
+              <select id="w-nfs-version">
+                <option value="4" selected>NFSv4 (recommandé)</option>
+                <option value="3">NFSv3</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div id="wizard-step1-error" class="form-error" style="display:none"></div>
+      </div>
+
+      <!-- ── Étape 2 : Partages ────────────────────────────────────────── -->
+      <div class="wizard-panel" id="wizard-step-2">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+          <span style="font-size:.85rem;color:var(--muted)">
+            Sélectionnez les partages à monter et associez une catégorie à chacun.
+          </span>
+          <button class="btn btn-sm" id="btn-browse" onclick="Mounts.wizardBrowse()">
+            <i class="bi bi-search"></i> Scanner les partages
+          </button>
+        </div>
+
+        <!-- Grille des partages -->
+        <div id="wizard-shares-grid" style="min-height:80px">
+          <div style="color:var(--muted);font-size:.84rem;padding:20px 0;text-align:center">
+            Cliquez sur « Scanner les partages » pour découvrir les partages disponibles.
+          </div>
+        </div>
+
+        <!-- Nouvelle catégorie -->
+        <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border)">
+          <div class="form-grid">
+            <div class="form-group" style="margin:0">
+              <label class="form-label">Créer une nouvelle catégorie</label>
+              <div style="display:flex;gap:8px">
+                <input id="w-newcat" type="text" placeholder="ex: concerts, sport…" style="flex:1">
+                <button class="btn btn-sm btn-success" onclick="Mounts.wizardAddCategory()">
+                  <i class="bi bi-plus-lg"></i> Ajouter
+                </button>
+              </div>
+              <span class="form-hint">Mise à jour instantanée des listes de catégories ci-dessus</span>
+            </div>
+          </div>
+        </div>
+
+        <div id="wizard-step2-error" class="form-error" style="display:none"></div>
+      </div>
+
+      <!-- ── Étape 3 : Confirmation ────────────────────────────────────── -->
+      <div class="wizard-panel" id="wizard-step-3">
+        <p style="font-size:.84rem;color:var(--muted);margin-bottom:12px">
+          Récapitulatif des montages qui vont être créés :
+        </p>
+        <div id="wizard-summary"></div>
+        <div id="wizard-step3-error" class="form-error" style="display:none"></div>
+      </div>
+
+    </div>
+
+    <!-- Erreur générale -->
+    <div id="modal-mount-error" style="display:none;margin:0 24px 12px;padding:10px 14px;
+         background:var(--red-bg,#3a1a1a);color:var(--red,#f87171);border-radius:6px;
+         font-size:.84rem;border:1px solid var(--red,#f87171)">
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn" onclick="Mounts.closeMount()">Annuler</button>
+      <button class="btn" id="btn-wizard-prev" style="display:none" onclick="Mounts.wizardPrev()">
+        <i class="bi bi-arrow-left"></i> Retour
+      </button>
+      <button class="btn btn-primary" id="btn-wizard-next" onclick="Mounts.wizardNext()">
+        Suivant <i class="bi bi-arrow-right"></i>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ MODAL : Édition montage (simple) ════════════════════════════════════ -->
+<div class="modal-overlay" id="overlay-edit-mount">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>Modifier le montage</h3>
+      <button class="modal-close" onclick="Mounts.closeEditMount()">&times;</button>
+    </div>
+    <div class="modal-body">
       <div class="form-group">
         <label class="form-label">Type de montage <span class="req">*</span></label>
         <div class="type-grid">
@@ -295,9 +466,7 @@
           </div>
         </div>
       </div>
-      <!-- Champs dynamiques selon le type -->
       <div id="type-fields" class="fields-section"></div>
-      <!-- Catégorie -->
       <div class="fields-section show">
         <div class="section-sep">Catégorie</div>
         <div class="form-grid">
@@ -320,13 +489,13 @@
         </div>
       </div>
     </div>
-    <div id="modal-mount-error" style="display:none;margin:0 24px 12px;padding:10px 14px;
+    <div id="modal-edit-error" style="display:none;margin:0 24px 12px;padding:10px 14px;
          background:var(--red-bg,#3a1a1a);color:var(--red,#f87171);border-radius:6px;
          font-size:.84rem;border:1px solid var(--red,#f87171)">
     </div>
     <div class="modal-footer">
-      <button class="btn" onclick="Mounts.closeMount()">Annuler</button>
-      <button class="btn btn-primary" id="btn-save-mount" onclick="Mounts.save()">
+      <button class="btn" onclick="Mounts.closeEditMount()">Annuler</button>
+      <button class="btn btn-primary" id="btn-save-edit" onclick="Mounts.saveEdit()">
         <i class="bi bi-check2"></i> Enregistrer
       </button>
     </div>
@@ -373,6 +542,31 @@
       <button class="btn" onclick="document.getElementById('overlay-update').classList.remove('active')">Fermer</button>
       <button class="btn btn-primary" id="btn-start-update" onclick="startUpdate()">
         <i class="bi bi-cloud-download"></i> Lancer la mise à jour
+      </button>
+    </div>
+  </div>
+</div>
+<!-- ══ MODAL : Purge (dev) ══════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="overlay-purge">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <h3><i class="bi bi-trash3" style="color:var(--red)"></i> Purge des données</h3>
+      <button class="modal-close" onclick="closePurge()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:.84rem;margin-bottom:8px">
+        Supprime <strong>tous les fichiers indexés</strong> et l'historique des scans.
+      </p>
+      <p style="font-size:.82rem;color:var(--red)">
+        <i class="bi bi-exclamation-triangle"></i>
+        Action irréversible — à utiliser en développement uniquement.
+      </p>
+      <div id="purge-result" style="margin-top:10px"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closePurge()">Annuler</button>
+      <button class="btn btn-danger" id="btn-confirm-purge" onclick="executePurge()">
+        <i class="bi bi-trash3"></i> Confirmer la purge
       </button>
     </div>
   </div>

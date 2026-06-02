@@ -422,3 +422,76 @@ select option { background: var(--bg-panel); }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+
+/* ── Wizard ────────────────────────────────────────────────────────────────── */
+.modal-lg { max-width: 680px; width: 96%; }
+
+.wizard-steps {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: .78rem;
+}
+.wizard-step {
+  color: var(--muted);
+  transition: color .2s;
+}
+.wizard-step.active {
+  color: var(--blue);
+  font-weight: 600;
+}
+.wizard-step.done {
+  color: var(--green);
+}
+
+.wizard-panel {
+  display: none;
+}
+.wizard-panel.active {
+  display: block;
+}
+
+.form-error {
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: var(--red-bg, #3a1a1a);
+  color: var(--red, #f87171);
+  border-radius: 6px;
+  font-size: .82rem;
+  border: 1px solid var(--red, #f87171);
+}
+
+/* Grille des partages */
+.shares-grid-row {
+  display: grid;
+  grid-template-columns: 32px 1fr 1fr;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 4px;
+  border-bottom: 1px solid var(--border);
+  font-size: .84rem;
+}
+.shares-grid-row:last-child { border-bottom: none; }
+.shares-grid-row.disabled { opacity: .45; pointer-events: none; }
+.shares-grid-header {
+  font-size: .75rem;
+  color: var(--muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+/* Récap étape 3 */
+.summary-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--card-bg);
+  border-radius: 6px;
+  margin-bottom: 6px;
+  font-size: .84rem;
+}
+.summary-share { font-weight: 600; flex: 1; }
+.summary-arrow { color: var(--muted); }
+.summary-cat   { color: var(--purple); }

@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Body, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -769,6 +769,267 @@ def force_version_check():
     except Exception as e:
         logger.error(f"force_version_check: {e}")
         raise HTTPException(500, str(e))
+
+# ── Serveurs connus ───────────────────────────────────────────────────────────
+
+@router.get("/mounts/known-servers")
+def get_known_servers():
+    """Liste des serveurs réseau connus avec leurs credentials."""
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text("""
+                SELECT id, server, mount_type, username, domain,
+                       smb_version, nfs_version, note
+                FROM known_servers
+                ORDER BY server
+            """)).fetchall()
+        return JSONResponse([{
+            "id":          r[0],
+            "server":      r[1],
+            "mount_type":  r[2],
+            "username":    r[3],
+            "domain":      r[4],
+            "smb_version": r[5],
+            "nfs_version": r[6],
+            "note":        r[7],
+        } for r in rows])
+    except Exception as e:
+        logger.error(f"get_known_servers: {e}")
+        raise HTTPException(500, str(e))
+
+
+@router.post("/mounts/known-servers")
+def upsert_known_server(data: dict = Body(...)):
+    """
+    Crée ou met à jour un serveur connu.
+    Upsert sur le champ server (UNIQUE).
+    """
+    server     = (data.get("server") or "").strip()
+    mount_type = (data.get("mount_type") or "smb").strip()
+    if not server:
+        raise HTTPException(400, "Champ 'server' obligatoire")
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("""
+                INSERT INTO known_servers
+                    (server, mount_type, username, password, domain,
+                     smb_version, nfs_version, note)
+                VALUES
+                    (:server, :mount_type, :username, :password, :domain,
+                     :smb_version, :nfs_version, :note)
+                ON CONFLICT (server) DO UPDATE SET
+                    mount_type  = EXCLUDED.mount_type,
+                    username    = EXCLUDED.username,
+                    password    = EXCLUDED.password,
+                    domain      = EXCLUDED.domain,
+                    smb_version = EXCLUDED.smb_version,
+                    nfs_version = EXCLUDED.nfs_version,
+                    note        = EXCLUDED.note,
+                    updated_at  = NOW()
+            """), {
+                "server":      server,
+                "mount_type":  mount_type,
+                "username":    data.get("username"),
+                "password":    data.get("password"),
+                "domain":      data.get("domain", "WORKGROUP"),
+                "smb_version": data.get("smb_version", "3.0"),
+                "nfs_version": data.get("nfs_version", 4),
+                "note":        data.get("note"),
+            })
+            conn.commit()
+            row = conn.execute(text(
+                "SELECT id FROM known_servers WHERE server = :s"
+            ), {"s": server}).fetchone()
+        return JSONResponse({"success": True, "id": row[0]})
+    except Exception as e:
+        logger.error(f"upsert_known_server: {e}")
+        raise HTTPException(500, str(e))
+
+
+@router.post("/mounts/batch")
+def create_mounts_batch(data: dict = Body(...)):
+    """
+    Crée plusieurs montages en une seule requête.
+
+    Body attendu :
+    {
+      "server_info": {
+        "server": "//DS1821",
+        "mount_type": "smb",
+        "username": "user",
+        "password": "pwd",
+        "domain": "WORKGROUP",
+        "smb_version": "3.0"
+      },
+      "mounts": [
+        { "share": "/Series",  "category_id": 1 },
+        { "share": "/Films",   "category_id": 2 },
+        { "share": "/Animes",  "category_name": "animes" }
+      ]
+    }
+
+    Si category_name est fourni au lieu de category_id,
+    la catégorie est créée automatiquement si elle n'existe pas.
+    """
+    server_info = data.get("server_info", {})
+    mounts_in   = data.get("mounts", [])
+
+    server     = (server_info.get("server") or "").strip()
+    mount_type = (server_info.get("mount_type") or "smb").strip()
+
+    if not server:
+        raise HTTPException(400, "server_info.server obligatoire")
+    if not mounts_in:
+        raise HTTPException(400, "La liste mounts est vide")
+
+    created = []
+    errors  = []
+
+    try:
+        with engine.connect() as conn:
+
+            # ── Sauvegarder / mettre à jour le serveur connu ──────────────
+            conn.execute(text("""
+                INSERT INTO known_servers
+                    (server, mount_type, username, password, domain,
+                     smb_version, nfs_version)
+                VALUES
+                    (:server, :mount_type, :username, :password, :domain,
+                     :smb_version, :nfs_version)
+                ON CONFLICT (server) DO UPDATE SET
+                    mount_type  = EXCLUDED.mount_type,
+                    username    = EXCLUDED.username,
+                    password    = EXCLUDED.password,
+                    domain      = EXCLUDED.domain,
+                    smb_version = EXCLUDED.smb_version,
+                    updated_at  = NOW()
+            """), {
+                "server":      server,
+                "mount_type":  mount_type,
+                "username":    server_info.get("username"),
+                "password":    server_info.get("password"),
+                "domain":      server_info.get("domain", "WORKGROUP"),
+                "smb_version": server_info.get("smb_version", "3.0"),
+                "nfs_version": server_info.get("nfs_version", 4),
+            })
+
+            # ── Traiter chaque montage demandé ────────────────────────────
+            for m in mounts_in:
+                share = (m.get("share") or "").strip()
+                if not share:
+                    errors.append({"share": share, "error": "share vide"})
+                    continue
+
+                # Résoudre la catégorie
+                cat_id   = m.get("category_id")
+                cat_name = (m.get("category_name") or "").strip().lower()
+
+                if not cat_id and cat_name:
+                    # Créer la catégorie si elle n'existe pas
+                    conn.execute(text("""
+                        INSERT INTO categories (name)
+                        VALUES (:name)
+                        ON CONFLICT (name) DO NOTHING
+                    """), {"name": cat_name})
+                    row = conn.execute(text(
+                        "SELECT id FROM categories WHERE name = :name"
+                    ), {"name": cat_name}).fetchone()
+                    cat_id = row[0] if row else None
+
+                if not cat_id:
+                    errors.append({"share": share, "error": "catégorie introuvable"})
+                    continue
+
+                # Construire le local_path
+                row_cat = conn.execute(text(
+                    "SELECT name FROM categories WHERE id = :id"
+                ), {"id": cat_id}).fetchone()
+                if not row_cat:
+                    errors.append({"share": share, "error": f"catégorie {cat_id} introuvable"})
+                    continue
+
+                # Compter les montages existants pour cet catégorie
+                # pour générer l'id après insert
+                try:
+                    # INSERT mounts
+                    row_m = conn.execute(text("""
+                        INSERT INTO mounts (mount_type, category_id, local_path, active)
+                        VALUES (:mt, :cat, 'PLACEHOLDER', true)
+                        RETURNING id
+                    """), {"mt": mount_type, "cat": cat_id}).fetchone()
+                    mount_id   = row_m[0]
+                    cat_name_v = row_cat[0]
+                    local_path = f"{MOUNT_BASE_PATH}/{cat_name_v}/{mount_id}-{cat_name_v}"
+
+                    conn.execute(text(
+                        "UPDATE mounts SET local_path = :lp WHERE id = :id"
+                    ), {"lp": local_path, "id": mount_id})
+
+                    # INSERT mount_smb ou mount_nfs
+                    if mount_type == "smb":
+                        conn.execute(text("""
+                            INSERT INTO mount_smb
+                                (mount_id, server, share, username, password,
+                                 domain, smb_version)
+                            VALUES
+                                (:mid, :srv, :share, :user, :pwd, :dom, :ver)
+                        """), {
+                            "mid":   mount_id,
+                            "srv":   server,
+                            "share": share,
+                            "user":  server_info.get("username"),
+                            "pwd":   server_info.get("password"),
+                            "dom":   server_info.get("domain", "WORKGROUP"),
+                            "ver":   server_info.get("smb_version", "3.0"),
+                        })
+                    else:
+                        conn.execute(text("""
+                            INSERT INTO mount_nfs
+                                (mount_id, server, export_path, nfs_version)
+                            VALUES (:mid, :srv, :share, :ver)
+                        """), {
+                            "mid":   mount_id,
+                            "srv":   server,
+                            "share": share,
+                            "ver":   server_info.get("nfs_version", 4),
+                        })
+
+                    created.append({
+                        "mount_id":    mount_id,
+                        "share":       share,
+                        "local_path":  local_path,
+                        "category_id": cat_id,
+                    })
+
+                except Exception as e_inner:
+                    err = str(e_inner)
+                    if "uq_smb_source" in err or "uq_nfs_source" in err:
+                        errors.append({"share": share, "error": "source déjà configurée"})
+                    else:
+                        errors.append({"share": share, "error": err})
+
+            conn.commit()
+
+            # ── Déclencher les scans pour les montages créés ──────────────
+            from watcher.scanner import scan_queue
+            for c in created:
+                scan_queue.enqueue_priority(c["mount_id"])
+
+        return JSONResponse({
+            "success": True,
+            "created": created,
+            "errors":  errors,
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"create_mounts_batch: {e}")
+        raise HTTPException(500, str(e))
+
+
+
+
     
 # ── Purge (développement) ─────────────────────────────────────────────────────
 

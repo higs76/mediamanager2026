@@ -398,6 +398,42 @@ function esc(s) {
     .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+/* ── Purge (dev) ──────────────────────────────────────────────────────────── */
+function confirmPurge() {
+  document.getElementById('purge-result').innerHTML = '';
+  document.getElementById('btn-confirm-purge').disabled = false;
+  document.getElementById('overlay-purge').classList.add('active');
+}
+
+function closePurge() {
+  document.getElementById('overlay-purge').classList.remove('active');
+}
+
+async function executePurge() {
+  const btn = document.getElementById('btn-confirm-purge');
+  const res = document.getElementById('purge-result');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Purge…';
+  try {
+    const r = await fetch(`${API}/api/admin/purge`, { method: 'DELETE' });
+    const d = await r.json();
+    if (d.success) {
+      res.innerHTML = '<span style="color:var(--green)"><i class="bi bi-check-circle"></i> ' + esc(d.message) + '</span>';
+      setTimeout(() => {
+        closePurge();
+        loadDashboard();
+      }, 1500);
+    } else {
+      res.innerHTML = '<span style="color:var(--red)">Erreur : ' + esc(JSON.stringify(d)) + '</span>';
+    }
+  } catch (e) {
+    res.innerHTML = '<span style="color:var(--red)"><i class="bi bi-x-circle"></i> ' + esc(e.message) + '</span>';
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-trash3"></i> Confirmer la purge';
+  }
+}
+
 /* ── Init ─────────────────────────────────────────────────────────────────── */
 window.addEventListener('load', () => {
   // Thème sauvegardé
@@ -409,4 +445,5 @@ window.addEventListener('load', () => {
   startDashboard();
   // Init mounts
   if (typeof Mounts !== 'undefined') Mounts.init();
+
 });

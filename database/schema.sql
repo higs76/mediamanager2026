@@ -35,6 +35,33 @@ CREATE TABLE IF NOT EXISTS categories (
 );
 
 -- ============================================================
+-- TABLE: known_servers
+-- Serveurs réseau connus avec leurs credentials.
+-- Permet de pré-remplir les infos lors de l'ajout de montages.
+-- Un serveur = une adresse unique (//nas1, //192.168.1.10...)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS known_servers (
+    id          SERIAL PRIMARY KEY,
+    server      VARCHAR(255) NOT NULL UNIQUE,
+    mount_type  VARCHAR(10)  NOT NULL CHECK (mount_type IN ('smb', 'nfs')),
+    username    VARCHAR(100),
+    password    VARCHAR(255),
+    domain      VARCHAR(100) DEFAULT 'WORKGROUP',
+    smb_version VARCHAR(10)  DEFAULT '3.0',
+    nfs_version INTEGER      DEFAULT 4,
+    note        TEXT,
+    updated_at  TIMESTAMP    DEFAULT CURRENT_TIMESTAMP
+);
+
+DROP TRIGGER IF EXISTS trg_known_servers_updated_at ON known_servers;
+CREATE TRIGGER trg_known_servers_updated_at
+    BEFORE UPDATE ON known_servers
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE INDEX IF NOT EXISTS idx_known_servers_type ON known_servers(mount_type);
+
+
+-- ============================================================
 -- TABLE: mounts
 -- En-tête de chaque montage (indépendant du type).
 -- C'est cet ID qui sert à construire le nom du montage :

@@ -13,12 +13,16 @@ const Mounts = (() => {
   let _deletingId = null;
   let _selType    = null;
 
-  /* ── Définition des types de montage ──────────────────────────────────── */
+  // État du wizard
+  let _wizardStep      = 1;
+  let _wizardType      = 'smb';
+  let _wizardShares    = [];   // partages découverts
+  let _wizardSelected  = [];   // [{share, category_name}]
+  let _wizardKnownServers = [];
+
+  /* ── Définition des types de montage (pour édition) ──────────────────── */
   const TYPES = {
     smb: {
-      icon: 'bi-server',
-      name: 'SMB / CIFS',
-      desc: 'NAS Synology, QNAP, Windows',
       fields: () => `
         <div class="section-sep">Partage réseau</div>
         <div class="form-grid">
@@ -35,7 +39,7 @@ const Mounts = (() => {
           </div>
           <div class="form-group">
             <label class="form-label">Partage <span class="req">*</span></label>
-            <input id="f-share" type="text" placeholder="/series — ou cliquer Parcourir">
+            <input id="f-share" type="text" placeholder="/series">
           </div>
         </div>
         <div class="section-sep">Authentification</div>
@@ -56,7 +60,6 @@ const Mounts = (() => {
           <div class="form-group">
             <label class="form-label">Domaine</label>
             <input id="f-domain" type="text" value="WORKGROUP">
-            <span class="form-hint">WORKGROUP pour la plupart des NAS</span>
           </div>
           <div class="form-group">
             <label class="form-label">Version SMB</label>
@@ -77,14 +80,10 @@ const Mounts = (() => {
             <label class="form-label">Options de montage</label>
             <input id="f-options" type="text"
                    value="uid=1000,gid=1000,file_mode=0644,dir_mode=0755,iocharset=utf8">
-            <span class="form-hint">Options CIFS passées à mount -t cifs -o ...</span>
           </div>
         </div>`
     },
     nfs: {
-      icon: 'bi-diagram-3',
-      name: 'NFS',
-      desc: 'NAS Linux, Synology NFS',
       fields: () => `
         <div class="section-sep">Export NFS</div>
         <div class="form-grid">
@@ -97,7 +96,6 @@ const Mounts = (() => {
                 <i class="bi bi-search"></i> Parcourir
               </button>
             </div>
-            <span class="form-hint">Sans // — NFS utilise l'IP directe</span>
             <div class="browse-results" id="browse-results"></div>
           </div>
           <div class="form-group">
@@ -158,6 +156,17 @@ const Mounts = (() => {
     _renderCategorySelect();
   }
 
+  async function _loadKnownServers() {
+    try {
+      const r = await fetch(`${API}/api/admin/mounts/known-servers`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      _wizardKnownServers = await r.json();
+    } catch (_) {
+      _wizardKnownServers = [];
+    }
+    _renderKnownServersSelect();
+  }
+
   /* ── Sync stats dashboard ─────────────────────────────────────────────── */
   function _syncDashStats() {
     const mounted = _allMounts.filter(m => m.is_mounted).length;
@@ -173,7 +182,6 @@ const Mounts = (() => {
     const pct = total > 0 ? Math.round(mounted / total * 100) : 0;
     const bar = document.getElementById('stat-mounts-bar');
     if (bar) bar.style.width = pct + '%';
-    // Catégories
     const cats = _categories.length ? _categories.join(', ') : '—';
     const catEl = document.getElementById('stat-categories-list');
     if (catEl) catEl.textContent = cats;
@@ -192,12 +200,14 @@ const Mounts = (() => {
   }
 
   function _renderCategorySelect() {
+    // Select du modal édition
     const sel = document.getElementById('f-cat-select');
-    if (!sel) return;
-    const cur = sel.value;
-    sel.innerHTML = '<option value="">— Choisir —</option>'
-      + _categories.map(c => `<option value="${_esc(c)}">${_cap(c)}</option>`).join('');
-    if (cur) sel.value = cur;
+    if (sel) {
+      const cur = sel.value;
+      sel.innerHTML = '<option value="">— Choisir —</option>'
+        + _categories.map(c => `<option value="${_esc(c)}">${_cap(c)}</option>`).join('');
+      if (cur) sel.value = cur;
+    }
   }
 
   function _filterCat(btn, cat) {
@@ -234,7 +244,9 @@ const Mounts = (() => {
         <td><span class="badge badge-blue">${_esc(m.category_name)}</span></td>
         <td><span class="badge badge-muted">${(m.mount_type || 'smb').toUpperCase()}</span></td>
         <td style="font-family:'JetBrains Mono',monospace;font-size:.82rem">${source}</td>
-        <td class="td-mono" title="${_esc(m.local_path)}">${_esc(m.local_path)}</td>
+        <td class="td-mono" title="${_esc(m.local_path)}">
+          …/${_esc(m.local_path.split('/MediaManagerMnt/').pop() ?? m.local_path)}
+        </td>
         <td>${m.is_mounted
           ? '<span class="badge badge-success"><span class="dot"></span>Monté</span>'
           : '<span class="badge badge-danger"><span class="dot"></span>Non monté</span>'}</td>
@@ -250,46 +262,401 @@ const Mounts = (() => {
     }).join('');
   }
 
-  /* ── Popup Ajout / Édition ────────────────────────────────────────────── */
+  /* ══════════════════════════════════════════════════════════════════════════
+     WIZARD — Ajout multi-montages
+  ══════════════════════════════════════════════════════════════════════════ */
+
   function _openAdd() {
-    _editingId = null;
-    _selType   = null;
-    document.getElementById('modal-mount-title').textContent = 'Ajouter un montage';
-    _resetForm();
-    _renderCategorySelect();
+    _wizardStep     = 1;
+    _wizardType     = 'smb';
+    _wizardShares   = [];
+    _wizardSelected = [];
+    _wizardGoToStep(1);
+    _loadKnownServers();
     _openOverlay('overlay-mount');
   }
+
+  function _renderKnownServersSelect() {
+    const sel = document.getElementById('w-known-server');
+    if (!sel) return;
+    sel.innerHTML = '<option value="">— Nouveau serveur —</option>'
+      + _wizardKnownServers.map(s =>
+          `<option value="${s.id}">${_esc(s.server)} (${s.mount_type.toUpperCase()})</option>`
+        ).join('');
+  }
+
+  function wizardLoadKnown() {
+    const sel = document.getElementById('w-known-server');
+    const id  = parseInt(sel?.value);
+    if (!id) return;
+    const s = _wizardKnownServers.find(x => x.id === id);
+    if (!s) return;
+    // Pré-remplir les champs
+    wizardSelectType(s.mount_type);
+    _setVal('w-server',      s.server      ?? '');
+    _setVal('w-username',    s.username     ?? '');
+    _setVal('w-domain',      s.domain       ?? 'WORKGROUP');
+    _setVal('w-smb-version', s.smb_version  ?? '3.0');
+    _setVal('w-nfs-server',  s.server       ?? '');
+    _setVal('w-nfs-version', String(s.nfs_version ?? 4));
+    // Note : le password n'est pas pré-rempli pour la sécurité
+    // mais on indique qu'il est mémorisé
+    const pwdField = document.getElementById('w-password');
+    if (pwdField) pwdField.placeholder = '(mémorisé — laisser vide pour garder)';
+  }
+
+  function wizardSelectType(type) {
+    _wizardType = type;
+    document.getElementById('wtype-smb')?.classList.toggle('active', type === 'smb');
+    document.getElementById('wtype-nfs')?.classList.toggle('active', type === 'nfs');
+    document.getElementById('wfields-smb').style.display = type === 'smb' ? '' : 'none';
+    document.getElementById('wfields-nfs').style.display = type === 'nfs' ? '' : 'none';
+  }
+
+  function _wizardGoToStep(step) {
+    _wizardStep = step;
+    // Panels
+    for (let i = 1; i <= 3; i++) {
+      document.getElementById(`wizard-step-${i}`)?.classList.toggle('active', i === step);
+    }
+    // Indicateurs
+    document.querySelectorAll('.wizard-step').forEach(el => {
+      const s = parseInt(el.dataset.step);
+      el.classList.toggle('active', s === step);
+      el.classList.toggle('done',   s < step);
+    });
+    // Boutons footer
+    const btnPrev = document.getElementById('btn-wizard-prev');
+    const btnNext = document.getElementById('btn-wizard-next');
+    if (btnPrev) btnPrev.style.display = step > 1 ? '' : 'none';
+    if (btnNext) {
+      if (step === 3) {
+        btnNext.innerHTML = '<i class="bi bi-check2"></i> Ajouter les montages';
+        btnNext.className = 'btn btn-success';
+      } else {
+        btnNext.innerHTML = 'Suivant <i class="bi bi-arrow-right"></i>';
+        btnNext.className = 'btn btn-primary';
+      }
+    }
+    // Cacher erreur générale
+    const errEl = document.getElementById('modal-mount-error');
+    if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+  }
+
+  function _wizardShowError(step, msg) {
+    const el = document.getElementById(`wizard-step${step}-error`);
+    if (el) { el.textContent = msg; el.style.display = 'block'; }
+  }
+
+  function _wizardClearError(step) {
+    const el = document.getElementById(`wizard-step${step}-error`);
+    if (el) { el.style.display = 'none'; el.textContent = ''; }
+  }
+
+  async function wizardNext() {
+    _wizardClearError(_wizardStep);
+
+    if (_wizardStep === 1) {
+      // Valider étape 1
+      const server = _wizardType === 'smb'
+        ? (_getVal('w-server') || '').trim()
+        : (_getVal('w-nfs-server') || '').trim();
+      if (!server) {
+        _wizardShowError(1, 'L\'adresse du serveur est obligatoire');
+        return;
+      }
+      _wizardGoToStep(2);
+      // Lancer le browse automatiquement
+      await wizardBrowse();
+
+    } else if (_wizardStep === 2) {
+      // Valider étape 2 : au moins un partage sélectionné avec une catégorie
+      _wizardCollectSelected();
+      if (_wizardSelected.length === 0) {
+        _wizardShowError(2, 'Sélectionner au moins un partage');
+        return;
+      }
+      const missing = _wizardSelected.find(s => !s.category_name);
+      if (missing) {
+        _wizardShowError(2, `Choisir une catégorie pour : ${missing.share}`);
+        return;
+      }
+      _wizardGoToStep(3);
+      _wizardRenderSummary();
+
+    } else if (_wizardStep === 3) {
+      await _wizardSubmit();
+    }
+  }
+
+  function wizardPrev() {
+    if (_wizardStep > 1) _wizardGoToStep(_wizardStep - 1);
+  }
+
+  async function wizardBrowse() {
+    const btn = document.getElementById('btn-browse');
+    const grid = document.getElementById('wizard-shares-grid');
+    if (!grid) return;
+
+    const server = _wizardType === 'smb'
+      ? (_getVal('w-server') || '').trim()
+      : (_getVal('w-nfs-server') || '').trim();
+
+    if (!server) {
+      _wizardShowError(1, 'Saisir l\'adresse du serveur d\'abord');
+      _wizardGoToStep(1);
+      return;
+    }
+
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Scan…'; }
+    grid.innerHTML = '<div style="color:var(--muted);font-size:.84rem;padding:16px 0;text-align:center"><span class="spinner"></span> Recherche des partages…</div>';
+
+    const user = _getVal('w-username') || null;
+    const pwd  = _getVal('w-password') || null;
+    let url = `${API}/api/admin/mounts/browse?type=${_wizardType}&server=${encodeURIComponent(server)}`;
+    if (user) url += `&username=${encodeURIComponent(user)}`;
+    if (pwd)  url += `&password=${encodeURIComponent(pwd)}`;
+
+    try {
+      const r = await fetch(url);
+      const d = await r.json();
+
+      if (d.error && !d.shares?.length) {
+        grid.innerHTML = `<div style="color:var(--red);font-size:.84rem;padding:12px 0">
+          <i class="bi bi-exclamation-triangle"></i> ${_esc(d.error)}</div>`;
+        return;
+      }
+      if (!d.shares?.length) {
+        grid.innerHTML = '<div style="color:var(--muted);font-size:.84rem;padding:12px 0">Aucun partage trouvé</div>';
+        return;
+      }
+
+      _wizardShares = d.shares;
+      _wizardRenderSharesGrid();
+
+    } catch (e) {
+      grid.innerHTML = `<div style="color:var(--red);font-size:.84rem;padding:12px 0">
+        <i class="bi bi-wifi-off"></i> ${_esc(e.message)}</div>`;
+    } finally {
+      if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-search"></i> Scanner les partages'; }
+    }
+  }
+
+  function _wizardRenderSharesGrid() {
+    const grid = document.getElementById('wizard-shares-grid');
+    if (!grid) return;
+
+    // Partages déjà configurés (pour les griser)
+    const existingSources = new Set(
+      _allMounts.map(m => `${(m.server||'').toLowerCase()}${(m.share||m.export_path||'').toLowerCase()}`)
+    );
+
+    const server = _wizardType === 'smb'
+      ? (_getVal('w-server') || '').trim().toLowerCase()
+      : (_getVal('w-nfs-server') || '').trim().toLowerCase();
+
+    const catOptions = '<option value="">— Choisir —</option>'
+      + _categories.map(c => `<option value="${_esc(c)}">${_cap(c)}</option>`).join('');
+
+    grid.innerHTML = `
+      <div class="shares-grid-row shares-grid-header">
+        <span></span>
+        <span>Partage</span>
+        <span>Catégorie</span>
+      </div>
+      ${_wizardShares.map((share, i) => {
+        const key      = `${server}${share.toLowerCase()}`;
+        const disabled = existingSources.has(key);
+        return `<div class="shares-grid-row${disabled ? ' disabled' : ''}" id="share-row-${i}">
+          <input type="checkbox" id="share-cb-${i}"
+                 ${disabled ? 'disabled checked' : ''}
+                 onchange="Mounts._wizardToggleShare(${i})">
+          <label for="share-cb-${i}" style="cursor:pointer;font-family:'JetBrains Mono',monospace;font-size:.82rem">
+            ${_esc(share)}
+            ${disabled ? '<span style="color:var(--muted);font-size:.75rem;margin-left:6px">déjà configuré</span>' : ''}
+          </label>
+          <select id="share-cat-${i}" ${disabled ? 'disabled' : ''}
+                  style="font-size:.82rem"
+                  onchange="Mounts._wizardCatChange(${i})">
+            ${catOptions}
+          </select>
+        </div>`;
+      }).join('')}`;
+  }
+
+  function _wizardToggleShare(i) {
+    // Rien de spécial — on lit l'état au moment de valider
+  }
+
+  function _wizardCatChange(i) {
+    // Coche automatiquement la case si on choisit une catégorie
+    const cb = document.getElementById(`share-cb-${i}`);
+    const sel = document.getElementById(`share-cat-${i}`);
+    if (cb && sel?.value) cb.checked = true;
+  }
+
+  function _wizardCollectSelected() {
+    _wizardSelected = [];
+    _wizardShares.forEach((share, i) => {
+      const cb  = document.getElementById(`share-cb-${i}`);
+      const sel = document.getElementById(`share-cat-${i}`);
+      if (cb?.checked && !cb.disabled) {
+        _wizardSelected.push({
+          share,
+          category_name: sel?.value || '',
+        });
+      }
+    });
+  }
+
+  function _wizardRenderSummary() {
+    const div = document.getElementById('wizard-summary');
+    if (!div) return;
+
+    const server = _wizardType === 'smb'
+      ? (_getVal('w-server') || '').trim()
+      : (_getVal('w-nfs-server') || '').trim();
+
+    div.innerHTML = _wizardSelected.map(s => `
+      <div class="summary-row">
+        <i class="bi bi-folder2" style="color:var(--blue)"></i>
+        <span class="summary-share">${_esc(server)}${_esc(s.share)}</span>
+        <span class="summary-arrow">→</span>
+        <span class="summary-cat"><i class="bi bi-collection"></i> ${_cap(_esc(s.category_name))}</span>
+      </div>
+    `).join('');
+  }
+
+  async function _wizardSubmit() {
+    const btnNext = document.getElementById('btn-wizard-next');
+    if (btnNext) { btnNext.disabled = true; btnNext.innerHTML = '<span class="spinner"></span> Enregistrement…'; }
+
+    const server = _wizardType === 'smb'
+      ? (_getVal('w-server') || '').trim()
+      : (_getVal('w-nfs-server') || '').trim();
+
+    const serverInfo = {
+      server,
+      mount_type:  _wizardType,
+      username:    _getVal('w-username')    || null,
+      password:    _getVal('w-password')    || null,
+      domain:      _getVal('w-domain')      || 'WORKGROUP',
+      smb_version: _getVal('w-smb-version') || '3.0',
+      nfs_version: parseInt(_getVal('w-nfs-version') || '4'),
+    };
+
+    const payload = {
+      server_info: serverInfo,
+      mounts: _wizardSelected.map(s => ({
+        share:         s.share,
+        category_name: s.category_name,
+      })),
+    };
+
+    try {
+      const r = await fetch(`${API}/api/admin/mounts/batch`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload),
+      });
+      const d = await r.json();
+
+      if (!r.ok) {
+        const errEl = document.getElementById('modal-mount-error');
+        if (errEl) {
+          errEl.textContent = d.detail ?? JSON.stringify(d);
+          errEl.style.display = 'block';
+        }
+        return;
+      }
+
+      _closeOverlay('overlay-mount');
+      await Promise.all([_loadMounts(), _loadCategories()]);
+
+      const nb = d.created?.length ?? 0;
+      const errs = d.errors?.length ?? 0;
+      let msg = `${nb} montage${nb > 1 ? 's' : ''} ajouté${nb > 1 ? 's' : ''}`;
+      if (errs) msg += ` — ${errs} erreur${errs > 1 ? 's' : ''} (voir console)`;
+      if (errs) console.warn('Erreurs batch:', d.errors);
+
+      _showBanner('warn',
+        '<i class="bi bi-exclamation-triangle"></i> ' + msg,
+        'Cliquer sur « Appliquer & Synchro » pour monter les partages.');
+
+    } catch (e) {
+      const errEl = document.getElementById('modal-mount-error');
+      if (errEl) { errEl.textContent = e.message; errEl.style.display = 'block'; }
+    } finally {
+      if (btnNext) { btnNext.disabled = false; btnNext.innerHTML = '<i class="bi bi-check2"></i> Ajouter les montages'; }
+    }
+  }
+
+  async function wizardAddCategory() {
+    const input = document.getElementById('w-newcat');
+    const name  = (input?.value || '').trim().toLowerCase();
+    if (!name) return;
+
+    try {
+      const r = await fetch(`${API}/api/admin/categories`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({name}),
+      });
+      if (!r.ok) throw new Error((await r.json()).detail ?? 'Erreur');
+      if (input) input.value = '';
+      // Recharger les catégories et mettre à jour la grille
+      await _loadCategories();
+      _wizardRefreshCatSelects();
+    } catch (e) {
+      _wizardShowError(2, 'Erreur création catégorie : ' + e.message);
+    }
+  }
+
+  function _wizardRefreshCatSelects() {
+    // Mettre à jour tous les selects de la grille sans la re-rendre entièrement
+    const catOptions = '<option value="">— Choisir —</option>'
+      + _categories.map(c => `<option value="${_esc(c)}">${_cap(c)}</option>`).join('');
+    _wizardShares.forEach((_, i) => {
+      const sel = document.getElementById(`share-cat-${i}`);
+      if (sel && !sel.disabled) {
+        const cur = sel.value;
+        sel.innerHTML = catOptions;
+        if (cur) sel.value = cur;
+      }
+    });
+  }
+
+  /* ══════════════════════════════════════════════════════════════════════════
+     ÉDITION — modal simple (overlay-edit-mount)
+  ══════════════════════════════════════════════════════════════════════════ */
 
   function _openEdit(id) {
     const m = _allMounts.find(x => x.id === id);
     if (!m) return;
     _editingId = id;
-    document.getElementById('modal-mount-title').textContent = 'Modifier le montage';
-    _resetForm();
-    selectType(m.mount_type || 'smb');
+    _selType   = m.mount_type || 'smb';
+    _resetEditForm();
+    selectType(_selType);
     _fillForm(m);
     _renderCategorySelect();
     // Bloquer le changement de type en édition
-    document.querySelectorAll('.type-card').forEach(c => {
-      const isSelected = c.dataset.type === m.mount_type;
-      c.style.opacity       = isSelected ? '1' : '0.3';
+    document.querySelectorAll('#overlay-edit-mount .type-card').forEach(c => {
+      c.style.opacity       = c.dataset.type === _selType ? '1' : '0.3';
       c.style.pointerEvents = 'none';
     });
-    _openOverlay('overlay-mount');
+    _openOverlay('overlay-edit-mount');
   }
 
-  function _resetForm() {
-    _selType = null;
-    // Cacher l'erreur précédente
-    const errEl = document.getElementById('modal-mount-error');
+  function _resetEditForm() {
+    const errEl = document.getElementById('modal-edit-error');
     if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
     const active = document.getElementById('f-active');
     if (active) active.checked = true;
     _setVal('f-cat-select', '');
     _setVal('f-newcat', '');
-    document.getElementById('type-fields').innerHTML = '';
-    document.getElementById('type-fields').classList.remove('show');
-    document.querySelectorAll('.type-card').forEach(c => {
+    const tf = document.getElementById('type-fields');
+    if (tf) { tf.innerHTML = ''; tf.classList.remove('show'); }
+    document.querySelectorAll('#overlay-edit-mount .type-card').forEach(c => {
       c.classList.remove('selected');
       c.style.opacity = '1';
       c.style.pointerEvents = '';
@@ -298,14 +665,13 @@ const Mounts = (() => {
 
   function selectType(type) {
     _selType = type;
-    document.querySelectorAll('.type-card').forEach(c =>
+    document.querySelectorAll('#overlay-edit-mount .type-card').forEach(c =>
       c.classList.toggle('selected', c.dataset.type === type)
     );
     const def = TYPES[type];
     if (!def) return;
     const section = document.getElementById('type-fields');
-    section.innerHTML = def.fields();
-    section.classList.add('show');
+    if (section) { section.innerHTML = def.fields(); section.classList.add('show'); }
   }
 
   function _fillForm(m) {
@@ -322,87 +688,18 @@ const Mounts = (() => {
     if (act) act.checked = m.active !== false;
   }
 
-  /* ── Password toggle ──────────────────────────────────────────────────── */
-  function _togglePwd() {
-    const inp  = document.getElementById('f-password');
-    const icon = document.getElementById('eye-icon');
-    if (!inp) return;
-    if (inp.type === 'password') {
-      inp.type = 'text';
-      icon?.classList.replace('bi-eye', 'bi-eye-slash');
-    } else {
-      inp.type = 'password';
-      icon?.classList.replace('bi-eye-slash', 'bi-eye');
-    }
-  }
-
-  /* ── Browse réseau ────────────────────────────────────────────────────── */
-  async function _browse(type) {
-    const server = (_getVal('f-server') || '').trim();
-    if (!server) { alert('Saisir d\'abord l\'adresse du serveur'); return; }
-
-    const box = document.getElementById('browse-results');
-    if (!box) return;
-    box.className = 'browse-results show';
-    box.innerHTML = '<div class="browse-msg"><span class="spinner"></span> Recherche…</div>';
-
-    const user = _getVal('f-user')     || null;
-    const pwd  = _getVal('f-password') || null;
-    let url = `${API}/api/admin/mounts/browse?type=${type}&server=${encodeURIComponent(server)}`;
-    if (user) url += `&username=${encodeURIComponent(user)}`;
-    if (pwd)  url += `&password=${encodeURIComponent(pwd)}`;
-
-    try {
-      const r = await fetch(url);
-      const d = await r.json();
-      if (d.error && !d.shares?.length) {
-        box.innerHTML = `<div class="browse-msg browse-error"><i class="bi bi-exclamation-triangle"></i> ${_esc(d.error)}</div>`;
-        return;
-      }
-      if (!d.shares?.length) {
-        box.innerHTML = '<div class="browse-msg">Aucun partage trouvé</div>';
-        return;
-      }
-      box.innerHTML = d.shares.map(s =>
-        `<div class="browse-item" onclick="Mounts._pickShare('${_esc(s)}')">
-          <i class="bi bi-folder2"></i>${_esc(s)}
-        </div>`
-      ).join('');
-    } catch (e) {
-      box.innerHTML = `<div class="browse-msg browse-error"><i class="bi bi-wifi-off"></i> ${_esc(e.message)}</div>`;
-    }
-  }
-
-  function _pickShare(share) {
-    _setVal('f-share', share);
-    _clearBrowse();
-  }
-
-  function _clearBrowse() {
-    const box = document.getElementById('browse-results');
-    if (box) { box.className = 'browse-results'; box.innerHTML = ''; }
-  }
-
-  /* ── Collapse ─────────────────────────────────────────────────────────── */
-  function _toggleCollapse(toggleEl) {
-    toggleEl.classList.toggle('open');
-    const body = toggleEl.nextElementSibling;
-    if (body) body.classList.toggle('open');
-  }
-
-  /* ── Payload & Save ───────────────────────────────────────────────────── */
   function _buildPayload() {
-    const catSelect  = document.getElementById('f-cat-select')?.value || '';
-    const newCat     = (document.getElementById('f-newcat')?.value || '').trim();
+    const catSelect    = document.getElementById('f-cat-select')?.value || '';
+    const newCat       = (document.getElementById('f-newcat')?.value || '').trim();
     const categoryName = newCat || catSelect;
-    const server  = (_getVal('f-server') || '').trim();
-    const share   = (_getVal('f-share')  || '').trim();
-    const options = _getVal('f-options');
+    const server       = (_getVal('f-server') || '').trim();
+    const share        = (_getVal('f-share')  || '').trim();
+    const options      = _getVal('f-options');
 
-    if (!_selType)     { alert('Choisir un type de montage');          return null; }
-    if (!server)       { alert('L\'adresse du serveur est requise');   return null; }
-    if (!share)        { alert('Le partage / export est requis');      return null; }
-    if (!categoryName) { alert('Choisir ou créer une catégorie');      return null; }
+    if (!_selType)     { alert('Choisir un type de montage');        return null; }
+    if (!server)       { alert('L\'adresse du serveur est requise'); return null; }
+    if (!share)        { alert('Le partage / export est requis');    return null; }
+    if (!categoryName) { alert('Choisir ou créer une catégorie');    return null; }
 
     const base = {
       mount_type:    _selType,
@@ -424,35 +721,31 @@ const Mounts = (() => {
       nfs_version: parseInt(_getVal('f-nfs-version') || '4') };
   }
 
-  async function save() {
+  async function saveEdit() {
     const payload = _buildPayload();
     if (!payload) return;
 
-    const btn = document.getElementById('btn-save-mount');
-    btn.disabled = true;
-    btn.innerHTML = '<span class="spinner"></span> Enregistrement…';
+    const btn = document.getElementById('btn-save-edit');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Enregistrement…'; }
 
     try {
-      const url    = _editingId ? `${API}/api/admin/mounts/${_editingId}` : `${API}/api/admin/mounts`;
-      const method = _editingId ? 'PUT' : 'POST';
-      const r = await fetch(url, {
-        method, headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(payload)
+      const r = await fetch(`${API}/api/admin/mounts/${_editingId}`, {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload),
       });
       if (!r.ok) {
         const err = await r.json().catch(() => ({detail: r.statusText}));
         throw new Error(JSON.stringify(err.detail ?? err));
       }
-      _closeOverlay('overlay-mount');
+      _closeOverlay('overlay-edit-mount');
       await Promise.all([_loadMounts(), _loadCategories()]);
       _showBanner('warn',
         '<i class="bi bi-exclamation-triangle"></i> Modifications non appliquées',
-        'Cliquer sur « Appliquer & Synchro » pour monter / démonter les partages.');
+        'Cliquer sur « Appliquer & Synchro » pour appliquer les changements.');
     } catch (e) {
-      // Afficher l'erreur dans le modal, pas en alert
-      const errEl = document.getElementById('modal-mount-error');
+      const errEl = document.getElementById('modal-edit-error');
       if (errEl) {
-        // L'API retourne souvent du JSON : extraire le message lisible
         let msg = e.message;
         try { msg = JSON.parse(e.message); } catch (_) {}
         errEl.textContent = typeof msg === 'string' ? msg : JSON.stringify(msg);
@@ -461,8 +754,7 @@ const Mounts = (() => {
         alert('Erreur : ' + e.message);
       }
     } finally {
-      btn.disabled = false;
-      btn.innerHTML = '<i class="bi bi-check2"></i> Enregistrer';
+      if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-check2"></i> Enregistrer'; }
     }
   }
 
@@ -537,6 +829,67 @@ const Mounts = (() => {
     }
   }
 
+  /* ── Password toggle (édition) ────────────────────────────────────────── */
+  function _togglePwd() {
+    const inp  = document.getElementById('f-password');
+    const icon = document.getElementById('eye-icon');
+    if (!inp) return;
+    if (inp.type === 'password') {
+      inp.type = 'text';
+      icon?.classList.replace('bi-eye', 'bi-eye-slash');
+    } else {
+      inp.type = 'password';
+      icon?.classList.replace('bi-eye-slash', 'bi-eye');
+    }
+  }
+
+  /* ── Browse réseau (édition) ──────────────────────────────────────────── */
+  async function _browse(type) {
+    const server = (_getVal('f-server') || '').trim();
+    if (!server) { alert('Saisir d\'abord l\'adresse du serveur'); return; }
+    const box = document.getElementById('browse-results');
+    if (!box) return;
+    box.className = 'browse-results show';
+    box.innerHTML = '<div class="browse-msg"><span class="spinner"></span> Recherche…</div>';
+    const user = _getVal('f-user')     || null;
+    const pwd  = _getVal('f-password') || null;
+    let url = `${API}/api/admin/mounts/browse?type=${type}&server=${encodeURIComponent(server)}`;
+    if (user) url += `&username=${encodeURIComponent(user)}`;
+    if (pwd)  url += `&password=${encodeURIComponent(pwd)}`;
+    try {
+      const r = await fetch(url);
+      const d = await r.json();
+      if (d.error && !d.shares?.length) {
+        box.innerHTML = `<div class="browse-msg browse-error"><i class="bi bi-exclamation-triangle"></i> ${_esc(d.error)}</div>`;
+        return;
+      }
+      if (!d.shares?.length) {
+        box.innerHTML = '<div class="browse-msg">Aucun partage trouvé</div>';
+        return;
+      }
+      box.innerHTML = d.shares.map(s =>
+        `<div class="browse-item" onclick="Mounts._pickShare('${_esc(s)}')">
+          <i class="bi bi-folder2"></i>${_esc(s)}
+        </div>`
+      ).join('');
+    } catch (e) {
+      box.innerHTML = `<div class="browse-msg browse-error"><i class="bi bi-wifi-off"></i> ${_esc(e.message)}</div>`;
+    }
+  }
+
+  function _pickShare(share) { _setVal('f-share', share); _clearBrowse(); }
+  function _clearBrowse() {
+    const box = document.getElementById('browse-results');
+    if (box) { box.className = 'browse-results'; box.innerHTML = ''; }
+  }
+
+  /* ── Collapse ─────────────────────────────────────────────────────────── */
+  function _toggleCollapse(toggleEl) {
+    toggleEl.classList.toggle('open');
+    const body = toggleEl.nextElementSibling;
+    if (body) body.classList.toggle('open');
+  }
+
   /* ── Bannière ─────────────────────────────────────────────────────────── */
   function _showBanner(type, title, detail) {
     const el = document.getElementById('sync-banner');
@@ -544,7 +897,9 @@ const Mounts = (() => {
     const cls = type === 'ok' ? '' : type === 'error' ? 'error' : 'warn';
     el.className = `alert ${cls}`;
     el.style.display = 'flex';
-    el.innerHTML = `<div><strong>${title}</strong>${detail ? `<br><span style="font-size:.82rem;opacity:.8">${_esc(detail)}</span>` : ''}</div>`;
+    el.innerHTML = `<div><strong>${title}</strong>${detail
+      ? `<br><span style="font-size:.82rem;opacity:.8">${_esc(detail)}</span>`
+      : ''}</div>`;
   }
 
   /* ── Overlays ─────────────────────────────────────────────────────────── */
@@ -563,13 +918,19 @@ const Mounts = (() => {
 
   /* ── API publique ─────────────────────────────────────────────────────── */
   return {
-    init, sync, refresh, save, confirmDelete,
-    selectType: (t) => selectType(t),
-    _allMounts,
+    init, sync, refresh, confirmDelete,
+    selectType,
+    saveEdit,
     _filterCat, _openAdd, _openEdit, _openDelete,
     _browse, _clearBrowse, _pickShare,
     _toggleCollapse, _togglePwd,
-    closeMount:   () => _closeOverlay('overlay-mount'),
-    closeConfirm: () => _closeOverlay('overlay-confirm'),
+    // Wizard
+    wizardNext, wizardPrev, wizardBrowse,
+    wizardLoadKnown, wizardSelectType, wizardAddCategory,
+    _wizardToggleShare, _wizardCatChange,
+    // Fermetures
+    closeMount:     () => _closeOverlay('overlay-mount'),
+    closeEditMount: () => _closeOverlay('overlay-edit-mount'),
+    closeConfirm:   () => _closeOverlay('overlay-confirm'),
   };
 })();
