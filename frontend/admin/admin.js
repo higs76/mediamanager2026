@@ -138,22 +138,23 @@ async function updateDashStats(d) {
     const r = await fetch(`${API}/api/admin/files/stats`);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const f = await r.json();
-
-    const ftotal = f.total     ?? 0;
-    const fknown = f.known     ?? 0;
-    const fnew   = f.new       ?? 0;
+    
+    const fanalyzed  = f.analyzed   ?? 0;
+    const fdiscovered= f.discovered ?? 0;
+    const fanalyzing = f.analyzing  ?? 0;
+    const ftotal     = f.total      ?? 0;
 
     // Barre de navigation (header)
-    setText('stat-files-ok',    fknown);
-    setText('stat-files-wait',  fnew);
+    setText('stat-files-ok',    fanalyzed);
+    setText('stat-files-wait',  fdiscovered + fanalyzing);
     setText('stat-files-total', ftotal);
 
     // Panneau détail
-    const pct   = ftotal > 0 ? Math.round(fknown / ftotal * 100) : 0;
-    setText('stat-files-pct',   ftotal > 0 ? `${pct}% TRAITÉ` : '—');
+    const pct = ftotal > 0 ? Math.round(fanalyzed / ftotal * 100) : 0;
+    setText('stat-files-pct',   ftotal > 0 ? `${pct}% ANALYSÉ` : '—');
     setText('stat-files-label', `${ftotal} Fichier${ftotal > 1 ? 's' : ''} indexé${ftotal > 1 ? 's' : ''}`);
-    setText('stat-files-ok2',   fknown);
-    setText('stat-files-wait2', fnew);
+    setText('stat-files-ok2',   fanalyzed);
+    setText('stat-files-wait2', fdiscovered + fanalyzing);
     const bar = document.getElementById('stat-files-bar');
     if (bar) bar.style.width = (ftotal > 0 ? pct : 0) + '%';
 

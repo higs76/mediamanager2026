@@ -173,6 +173,8 @@ async def lifespan(app: FastAPI):
     # Démarrer la file de scans en arrière-plan
     from watcher.scanner import scan_queue
     scan_queue.start()
+    from watcher.analyzer import analyze_queue
+    analyze_queue.start()
     # Scanner tous les montages actifs au démarrage
     scan_queue.enqueue_all_active()
     yield

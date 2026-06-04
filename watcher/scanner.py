@@ -213,12 +213,12 @@ def scan_mount(mount_id: int, job_id: int) -> dict:
 
                     if existing is None:
                         # Cas A : nouveau fichier
-                        conn.execute(text("""
+                        conn.execute(text("""                            
                             INSERT INTO media_files
                                 (mount_id, hash_partial, path_relative, filename,
-                                 extension, size_bytes, status)
+                                extension, size_bytes, status, disk_status)
                             VALUES
-                                (:mid, :hash, :path, :fname, :ext, :size, 'new')
+                                (:mid, :hash, :path, :fname, :ext, :size, 'discovered', 'present')
                         """), {
                             "mid":   mount_id,
                             "hash":  file_hash,
@@ -237,7 +237,7 @@ def scan_mount(mount_id: int, job_id: int) -> dict:
                         # Cas D : même hash, montage différent → doublon
                         conn.execute(text("""
                             UPDATE media_files
-                            SET status = 'duplicate', last_seen_at = NOW()
+                            SET disk_status = 'duplicate', last_seen_at = NOW()
                             WHERE id = :id
                         """), {"id": existing[0]})
                         seen_ids.add(existing[0])
@@ -249,7 +249,7 @@ def scan_mount(mount_id: int, job_id: int) -> dict:
                             UPDATE media_files
                             SET path_relative = :path,
                                 filename      = :fname,
-                                status        = 'known',
+                                disk_status   = 'present',
                                 last_seen_at  = NOW()
                             WHERE id = :id
                         """), {
@@ -264,7 +264,14 @@ def scan_mount(mount_id: int, job_id: int) -> dict:
                         # Cas B : fichier connu, rien n'a changé
                         conn.execute(text("""
                             UPDATE media_files
-                            SET status = 'known', last_seen_at = NOW()
+                            SET status = CASE
+                                    WHEN EXISTS (
+                                        SELECT 1 FROM video_metadata WHERE file_id = media_files.id
+                                    ) THEN 'analyzed'
+                                    ELSE 'discovered'
+                                END,
+                                disk_status  = 'present',
+                                last_seen_at = NOW()
                             WHERE id = :id
                         """), {"id": existing[0]})
                         seen_ids.add(existing[0])
@@ -281,7 +288,7 @@ def scan_mount(mount_id: int, job_id: int) -> dict:
             # Tous les fichiers de ce montage qui n'ont pas été vus
             all_rows = conn.execute(text("""
                 SELECT id FROM media_files
-                WHERE mount_id = :mid AND status != 'missing'
+                WHERE mount_id = :mid AND disk_status = 'present'
             """), {"mid": mount_id}).fetchall()
 
             missing_ids = [r[0] for r in all_rows if r[0] not in seen_ids]
@@ -289,7 +296,7 @@ def scan_mount(mount_id: int, job_id: int) -> dict:
             if missing_ids:
                 conn.execute(text("""
                     UPDATE media_files
-                    SET status = 'missing'
+                    SET disk_status = 'missing'
                     WHERE id = ANY(:ids)
                 """), {"ids": missing_ids})
                 counters["files_missing"] = len(missing_ids)
@@ -329,6 +336,15 @@ def scan_mount(mount_id: int, job_id: int) -> dict:
         f"{counters['files_updated']} renommés, "
         f"{counters['files_missing']} disparus"
     )
+
+    # Déclencher l'analyse des nouveaux fichiers
+    if counters["files_new"] > 0:
+        try:
+            from watcher.analyzer import analyze_queue
+            analyze_queue.trigger()
+        except Exception:
+            pass
+
     return counters
 
 

@@ -1071,10 +1071,19 @@ def files_stats():
             by_status = {r[0]: r[1] for r in rows}
             total     = sum(by_status.values())
             # "traités" = known, "en attente" = new
-            known     = by_status.get("known", 0)
-            new_files = by_status.get("new", 0)
-            missing   = by_status.get("missing", 0)
-            duplicate = by_status.get("duplicate", 0)
+            analyzed  = by_status.get("analyzed",  0)
+            discovered= by_status.get("discovered", 0)
+            analyzing = by_status.get("analyzing",  0)
+
+            # Compteurs disk_status
+            disk_rows = conn.execute(text("""
+                SELECT disk_status, COUNT(*) as cnt
+                FROM media_files
+                GROUP BY disk_status
+            """)).fetchall()
+            by_disk = {r[0]: r[1] for r in disk_rows}
+            missing   = by_disk.get("missing",   0)
+            duplicate = by_disk.get("duplicate", 0)
 
             # Compteurs par catégorie
             cat_rows = conn.execute(text("""
@@ -1107,11 +1116,12 @@ def files_stats():
             } for r in last_scans]
 
         return JSONResponse({
-            "total":       total,
-            "known":       known,
-            "new":         new_files,
-            "missing":     missing,
-            "duplicate":   duplicate,
+            "total":      total,
+            "analyzed":   analyzed,
+            "discovered": discovered,
+            "analyzing":  analyzing,
+            "missing":    missing,
+            "duplicate":  duplicate,
             "by_category": by_category,
             "last_scans":  scans,
         })

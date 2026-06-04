@@ -215,6 +215,65 @@ CREATE TRIGGER trg_config_updated_at
     BEFORE UPDATE ON config
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
+
+-- ============================================================
+-- TABLE: analyze_sessions
+-- Sessions d'analyse par dossier (dernier niveau).
+-- Sert de log de progression — une session par dossier/batch.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS analyze_sessions (
+    id              SERIAL PRIMARY KEY,
+    mount_id        INTEGER NOT NULL REFERENCES mounts(id) ON DELETE CASCADE,
+    folder_path     VARCHAR(1000) NOT NULL,
+    files_total     INTEGER NOT NULL DEFAULT 0,
+    files_done      INTEGER NOT NULL DEFAULT 0,
+    files_error     INTEGER NOT NULL DEFAULT 0,
+    status          VARCHAR(20) NOT NULL DEFAULT 'pending'
+                    CHECK (status IN ('pending','running','done','error')),
+    created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    started_at      TIMESTAMP,
+    finished_at     TIMESTAMP,
+    error_message   TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_analyze_sessions_mount  ON analyze_sessions(mount_id);
+CREATE INDEX IF NOT EXISTS idx_analyze_sessions_status ON analyze_sessions(status);
+
+-- Enrichissement video_metadata
+ALTER TABLE video_metadata
+    ADD COLUMN IF NOT EXISTS hdr_format           VARCHAR(50),
+    ADD COLUMN IF NOT EXISTS color_space          VARCHAR(50),
+    ADD COLUMN IF NOT EXISTS audio_channels       TEXT,
+    ADD COLUMN IF NOT EXISTS audio_channel_layouts TEXT,
+    ADD COLUMN IF NOT EXISTS subtitle_count       INTEGER,
+    ADD COLUMN IF NOT EXISTS file_path_snapshot   VARCHAR(1000);
+
+-- Config analyse
+INSERT INTO config (key, value, description) VALUES
+    ('analyze_workers',      '2',    'Fichiers analysés en parallèle par session'),
+    ('analyze_session_size', '50',   'Nombre max de fichiers par session'),
+    ('analyze_auto',         'true', 'Lancer l''analyse automatiquement après un scan')
+ON CONFLICT (key) DO NOTHING;
+
+-- Refonte statuts media_files
+ALTER TABLE media_files DROP CONSTRAINT IF EXISTS media_files_status_check;
+ALTER TABLE media_files ADD CONSTRAINT media_files_status_check
+    CHECK (status IN ('discovered', 'analyzing', 'analyzed'));
+
+ALTER TABLE media_files
+    ADD COLUMN IF NOT EXISTS disk_status VARCHAR(20) NOT NULL DEFAULT 'present'
+    CHECK (disk_status IN ('present', 'missing', 'duplicate'));
+
+CREATE INDEX IF NOT EXISTS idx_media_files_disk_status ON media_files(disk_status);
+
+ALTER TABLE video_metadata DROP CONSTRAINT IF EXISTS video_metadata_file_id_fkey;
+ALTER TABLE video_metadata ADD CONSTRAINT video_metadata_file_id_fkey
+    FOREIGN KEY (file_id) REFERENCES media_files(id) ON DELETE CASCADE;
+
+ALTER TABLE rename_proposals DROP CONSTRAINT IF EXISTS rename_proposals_file_id_fkey;
+ALTER TABLE rename_proposals ADD CONSTRAINT rename_proposals_file_id_fkey
+    FOREIGN KEY (file_id) REFERENCES media_files(id) ON DELETE CASCADE;
+
 -- ==========================================
 -- INDEXES pour performance
 -- ==========================================
