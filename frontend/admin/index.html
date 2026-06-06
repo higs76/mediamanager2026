@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>MM2026 — Admin</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
   <link rel="stylesheet" href="admin.css">
 </head>
 <body>
@@ -33,7 +34,13 @@
       </button>
       <button class="nav-item" data-tab="logs" onclick="switchTab('logs')">
         <i class="bi bi-terminal"></i> Logs
-      </button>      
+      </button>
+      <button class="nav-item" data-tab="stats" onclick="switchTab('stats')">
+        <i class="bi bi-bar-chart-line"></i> Statistiques
+      </button>
+      <button class="nav-item" data-tab="config" onclick="switchTab('config')">
+        <i class="bi bi-gear"></i> Config
+      </button>
     </div>
   </div>
 
@@ -124,6 +131,12 @@
               <span>Traités : <span id="stat-files-ok2">—</span></span>
               <span>En attente : <span id="stat-files-wait2">—</span></span>
             </div>
+            <div style="margin-top:6px;font-size:.75rem;color:var(--muted);line-height:1.8">
+              Poids : <strong id="stat-files-size">—</strong><br>
+              Manquants : <strong id="stat-files-missing" style="color:var(--orange,#f97316)">—</strong>
+              &nbsp;·&nbsp;
+              Doublons : <strong id="stat-files-duplicate" style="color:var(--red)">—</strong>
+            </div>
           </div>
           <div class="stats-box">
             <div class="stats-box-title"><span>Montages NAS</span></div>
@@ -136,7 +149,20 @@
           </div>
           <div class="stats-box" id="stat-db-box">
             <div class="stats-box-title"><span>Base de données</span></div>
-            <div style="font-size:.85rem;color:var(--muted)" id="stat-db-info">—</div>
+            <div style="font-size:.85rem;color:var(--muted)" id="stat-db-info">
+              <div class="stat-value" id="stat-db-size">—</div>
+              <div style="font-size:.75rem;color:var(--muted);margin-top:4px">
+                Taille de la base PostgreSQL
+              </div>
+            </div>
+          </div>
+          <div class="stats-box">
+              <div class="stats-box-title">BIBLIOTHÈQUE</div>
+              <div class="stat-value" id="stat-lib-titles">—</div>
+              <div style="font-size:.75rem;color:var(--muted);margin-top:4px">Titres détectés</div>
+              <div style="margin-top:8px;font-size:.78rem;color:var(--muted)">
+                Durée totale : <strong id="stat-lib-hours">—</strong>
+              </div>
           </div>
         </div>
       </div>
@@ -220,6 +246,138 @@
       </div>
     </div>
   </div>
+
+  <!-- ══ PANEL : Statistiques ══════════════════════════════════════════════ -->
+  <div id="panel-stats" class="tab-panel">
+  <div class="page-header">
+    <h2>Statistiques de la bibliothèque</h2>
+    <button class="btn btn-sm" onclick="Stats.load()">
+      <i class="bi bi-arrow-clockwise"></i> Rafraîchir
+    </button>
+  </div>
+
+  <!-- Filtre catégories -->
+  <div class="tabs" id="stats-cat-tabs" style="margin-bottom:20px"></div>
+
+  <!-- KPIs -->
+  <div class="kpi-grid" style="margin-bottom:24px">
+    <div class="kpi-card">
+      <div class="kpi-icon"><i class="bi bi-film"></i></div>
+      <div class="kpi-value" id="kpi-total">—</div>
+      <div class="kpi-label">Fichiers analysés</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-icon"><i class="bi bi-clock"></i></div>
+      <div class="kpi-value" id="kpi-hours">—</div>
+      <div class="kpi-label">Heures de contenu</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-icon"><i class="bi bi-hdd"></i></div>
+      <div class="kpi-value" id="kpi-size">—</div>
+      <div class="kpi-label">Taille moyenne</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-icon"><i class="bi bi-database"></i></div>
+      <div class="kpi-value" id="kpi-total-size">—</div>
+      <div class="kpi-label">Taille totale</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-icon"><i class="bi bi-collection-play"></i></div>
+      <div class="kpi-value" id="kpi-titles">—</div>
+      <div class="kpi-label">Titres détectés</div>
+    </div>
+    <div class="kpi-card kpi-warn">
+      <div class="kpi-icon"><i class="bi bi-arrow-up-circle"></i></div>
+      <div class="kpi-value" id="kpi-upgrade">—</div>
+      <div class="kpi-label">Fichiers à upgrader (SD/vieux codec)</div>
+    </div>
+  </div>
+
+  <!-- Section Vidéo -->
+  <div class="stats-section-title">
+    <i class="bi bi-camera-video"></i> Vidéo
+  </div>
+  <div class="charts-grid" style="margin-bottom:24px">
+    <div class="chart-card">
+      <div class="chart-title">Codecs vidéo</div>
+      <canvas id="chart-codecs"></canvas>
+      <div class="chart-legend" id="legend-codecs"></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">Résolutions</div>
+      <canvas id="chart-resolutions"></canvas>
+      <div class="chart-legend" id="legend-resolutions"></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">Format HDR</div>
+      <canvas id="chart-hdr"></canvas>
+      <div class="chart-legend" id="legend-hdr"></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title" id="chart-cat-title">Répartition par catégorie</div>
+      <canvas id="chart-categories"></canvas>
+      <div class="chart-legend" id="legend-categories"></div>
+    </div>
+  </div>
+
+  <!-- Section Audio -->
+  <div class="stats-section-title">
+    <i class="bi bi-volume-up"></i> Audio
+  </div>
+  <div class="charts-grid" style="margin-bottom:16px">
+    <div class="chart-card">
+      <div class="chart-title">Codecs audio</div>
+      <canvas id="chart-audio-codecs"></canvas>
+      <div class="chart-legend" id="legend-audio-codecs"></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">Canaux audio</div>
+      <canvas id="chart-audio-channels"></canvas>
+      <div class="chart-legend" id="legend-audio-channels"></div>
+    </div>
+    <div class="chart-card" style="grid-column: span 2">
+      <div class="chart-title">Langues audio</div>
+      <div class="tags-container" id="tags-audio-langs"></div>
+    </div>
+  </div>
+
+  <!-- Section Sous-titres -->
+  <div class="stats-section-title">
+    <i class="bi bi-chat-square-text"></i> Sous-titres
+  </div>
+  <div class="charts-grid" style="margin-bottom:24px">
+    <div class="chart-card">
+      <div class="chart-title">Présence sous-titres</div>
+      <canvas id="chart-sub-presence"></canvas>
+      <div class="chart-legend" id="legend-sub-presence"></div>
+    </div>
+    <div class="chart-card" style="grid-column: span 3">
+      <div class="chart-title">Langues sous-titres</div>
+      <div class="tags-container" id="tags-sub-langs"></div>
+    </div>
+  </div>
+
+  <!-- Section Titres -->
+  <div class="stats-section-title">
+    <i class="bi bi-collection-play"></i> Titres détectés
+    <span class="stats-section-sub" id="titles-count"></span>
+  </div>
+  <div class="chart-card" style="margin-bottom:24px">
+    <div id="titles-list"></div>
+  </div>
+
+</div>
+
+<!-- ══ PANEL : Config ═══════════════════════════════════════════════════════ -->
+<div id="panel-config" class="tab-panel">
+  <div class="page-header">
+    <h2>Configuration</h2>
+    <button class="btn btn-sm" onclick="Config.load()">
+      <i class="bi bi-arrow-clockwise"></i> Rafraîchir
+    </button>
+  </div>
+  <div id="config-list"></div>
+</div>
 
   <!-- ── API ──────────────────────────────────────────────────────────────── -->
   <div id="panel-api" class="tab-panel">
@@ -574,5 +732,7 @@
 
 <script src="admin.js"></script>
 <script src="mounts.js"></script>
+<script src="stats.js"></script>
+<script src="config.js"></script>
 </body>
 </html>

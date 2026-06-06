@@ -21,7 +21,9 @@ function switchTab(name) {
   clearTimeout(dashTimer);
   activeTab = name;
   if (name === 'dashboard') startDashboard();
+  else if (name === 'stats') Stats.load();
   else if (name === 'logs')  startLogs();
+  else if (name === 'config') Config.load();
 }
 
 /* ── Thème ────────────────────────────────────────────────────────────────── */
@@ -177,6 +179,32 @@ async function updateDashStats(d) {
   } catch (e) {
     console.warn('files/stats:', e.message);
   }
+
+// ── Bibliothèque ──────────────────────────────────────────────────────────
+      const lib = d.library ?? {};
+      const tb  = lib.total_tb ?? 0;
+      setText('stat-files-size',
+        tb >= 1 ? `${tb} To` : `${Math.round(tb * 1024)} Go`);
+      setText('stat-files-missing',   lib.missing_files   ?? 0);
+      setText('stat-files-duplicate', lib.duplicate_files ?? 0);
+
+      // Nb titres
+      setText('stat-lib-titles', lib.nb_titles ?? '—');
+
+      // Durée totale
+      const h      = lib.total_hours ?? 0;
+      const years  = Math.floor(h / 8760);
+      const months = Math.floor((h % 8760) / 730);
+      let hl = '';
+      if (years  > 0) hl += `${years} an${years  > 1 ? 's' : ''} `;
+      if (months > 0) hl += `${months} mois`;
+      if (!hl)        hl  = `${Math.round(h).toLocaleString('fr-FR')} h`;
+      setText('stat-lib-hours', hl.trim());
+
+      // BDD
+      setText('stat-db-size',    d.services?.database?.size ?? '—');
+      setText('stat-db-missing', lib.missing_files ?? 0);
+
 }
 
 async function svcAction(svc, action) {

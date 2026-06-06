@@ -137,6 +137,48 @@ def _get_mount_full(conn, mount_id: int) -> Optional[dict]:
     return result
 
 
+# ── Config ───────────────────────────────────────────────────────────────────
+
+@router.get("/config")
+def get_config_all():
+    """Retourne toutes les clés de config."""
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text(
+                "SELECT key, value, description FROM config ORDER BY key"
+            )).fetchall()
+        return JSONResponse([{
+            "key":         r[0],
+            "value":       r[1],
+            "description": r[2],
+        } for r in rows])
+    except Exception as e:
+        logger.error(f"get_config_all: {e}")
+        raise HTTPException(500, str(e))
+
+
+@router.put("/config/{key}")
+def update_config(key: str, data: dict = Body(...)):
+    """Met à jour une valeur de config."""
+    value = data.get("value")
+    if value is None:
+        raise HTTPException(400, "Champ 'value' obligatoire")
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text(
+                "UPDATE config SET value = :v WHERE key = :k RETURNING key"
+            ), {"v": str(value), "k": key}).fetchone()
+            conn.commit()
+        if not result:
+            raise HTTPException(404, f"Clé '{key}' introuvable")
+        return JSONResponse({"success": True, "key": key, "value": str(value)})
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"update_config {key}: {e}")
+        raise HTTPException(500, str(e))
+
+
 # ── Catégories ────────────────────────────────────────────────────────────────
 
 @router.get("/categories")
@@ -1127,4 +1169,244 @@ def files_stats():
         })
     except Exception as e:
         logger.error(f"files_stats: {e}")
+        raise HTTPException(500, str(e))
+
+
+
+# Dictionnaire ISO 639 → nom lisible
+LANG_NAMES = {
+    "fra": "Français", "fre": "Français", "fr": "Français",
+    "eng": "Anglais",  "en":  "Anglais",
+    "jpn": "Japonais", "ja":  "Japonais",
+    "ger": "Allemand", "deu": "Allemand", "de": "Allemand",
+    "spa": "Espagnol", "es":  "Espagnol",
+    "ita": "Italien",  "it":  "Italien",
+    "por": "Portugais","pt":  "Portugais",
+    "chi": "Chinois",  "zho": "Chinois",  "zh": "Chinois",
+    "kor": "Coréen",   "ko":  "Coréen",
+    "ara": "Arabe",    "ar":  "Arabe",
+    "srp": "Serbe",    "sr":  "Serbe",
+    "fin": "Finnois",  "fi":  "Finnois",
+    "mis": "Non identifiée",
+    "und": "Non définie",
+    "":    "Inconnue",
+}
+
+def _resolve_lang(code: str) -> str:
+    return LANG_NAMES.get(code.strip().lower(), code.strip().upper())
+
+
+@router.get("/files/quality-stats")
+def files_quality_stats(cat_id: int = None):
+    """
+    Statistiques qualité de la bibliothèque.
+    cat_id (optionnel) : filtrer par catégorie.
+    """
+    try:
+        with engine.connect() as conn:
+
+            # ── Filtre catégorie ──────────────────────────────────────────
+            if cat_id:
+                where_mf  = "WHERE mf.mount_id IN (SELECT id FROM mounts WHERE category_id = :cat_id)"
+                where_vm  = """WHERE vm.file_id IN (
+                                SELECT mf.id FROM media_files mf
+                                JOIN mounts m ON m.id = mf.mount_id
+                                WHERE m.category_id = :cat_id)"""
+                params = {"cat_id": cat_id}
+            else:
+                where_mf = ""
+                where_vm = ""
+                params   = {}
+
+            # ── Codecs vidéo ──────────────────────────────────────────────
+            codecs = conn.execute(text(f"""
+                SELECT video_codec, COUNT(*) as cnt
+                FROM video_metadata vm
+                JOIN media_files mf ON mf.id = vm.file_id
+                {where_mf.replace('WHERE mf.', 'WHERE mf.')}
+                {'WHERE' if not where_mf else 'AND'} video_codec IS NOT NULL
+                GROUP BY video_codec ORDER BY cnt DESC
+            """), params).fetchall()
+
+            # ── Résolutions ───────────────────────────────────────────────
+            resolutions = conn.execute(text(f"""
+                SELECT
+                    CASE
+                        WHEN video_height >= 2160 THEN '4K'
+                        WHEN video_height >= 1080 THEN '1080p'
+                        WHEN video_height >= 720  THEN '720p'
+                        ELSE 'SD'
+                    END as label,
+                    COUNT(*) as cnt
+                FROM video_metadata vm
+                JOIN media_files mf ON mf.id = vm.file_id
+                {where_mf.replace('WHERE mf.', 'WHERE mf.')}
+                {'WHERE' if not where_mf else 'AND'} video_height IS NOT NULL
+                GROUP BY label ORDER BY cnt DESC
+            """), params).fetchall()
+
+            # ── HDR ───────────────────────────────────────────────────────
+            hdr = conn.execute(text(f"""
+                SELECT hdr_format, COUNT(*) as cnt
+                FROM video_metadata vm
+                JOIN media_files mf ON mf.id = vm.file_id
+                {where_mf.replace('WHERE mf.', 'WHERE mf.')}
+                {'WHERE' if not where_mf else 'AND'} hdr_format IS NOT NULL
+                GROUP BY hdr_format ORDER BY cnt DESC
+            """), params).fetchall()
+
+            # Sous-requête de filtre réutilisable
+            if cat_id:
+                file_filter = """file_id IN (
+                    SELECT mf.id FROM media_files mf
+                    JOIN mounts m ON m.id = mf.mount_id
+                    WHERE m.category_id = :cat_id
+                )"""
+                path_filter = """mf.mount_id IN (
+                    SELECT id FROM mounts WHERE category_id = :cat_id
+                )"""
+            else:
+                file_filter = "1=1"
+                path_filter = "1=1"
+
+            # ── Codecs audio ──────────────────────────────────────────────
+            audio_rows = conn.execute(text(f"""
+                SELECT audio_codecs FROM video_metadata
+                WHERE {file_filter} AND audio_codecs IS NOT NULL
+            """), params).fetchall()
+
+            audio_codec_counts = {}
+            for row in audio_rows:
+                for codec in row[0].split(";"):
+                    c = codec.strip().upper()
+                    if c:
+                        audio_codec_counts[c] = audio_codec_counts.get(c, 0) + 1
+            audio_codecs_out = sorted(
+                [{"label": k, "count": v} for k, v in audio_codec_counts.items()],
+                key=lambda x: -x["count"]
+            )
+
+            # ── Langues audio ─────────────────────────────────────────────
+            lang_rows = conn.execute(text(f"""
+                SELECT audio_languages FROM video_metadata
+                WHERE {file_filter} AND audio_languages IS NOT NULL
+            """), params).fetchall()
+
+            audio_lang_counts = {}
+            for row in lang_rows:
+                for lang in row[0].split(";"):
+                    l = lang.strip().lower()
+                    if l:
+                        name = _resolve_lang(l)
+                        audio_lang_counts[name] = audio_lang_counts.get(name, 0) + 1
+            audio_langs_out = sorted(
+                [{"label": k, "count": v} for k, v in audio_lang_counts.items()],
+                key=lambda x: -x["count"]
+            )
+
+            # ── Canaux audio ──────────────────────────────────────────────
+            chan_rows = conn.execute(text(f"""
+                SELECT audio_channel_layouts FROM video_metadata
+                WHERE {file_filter} AND audio_channel_layouts IS NOT NULL
+            """), params).fetchall()
+
+            chan_counts = {}
+            for row in chan_rows:
+                for ch in row[0].split(";"):
+                    c = ch.strip()
+                    if c:
+                        chan_counts[c] = chan_counts.get(c, 0) + 1
+            channels_out = sorted(
+                [{"label": k, "count": v} for k, v in chan_counts.items()],
+                key=lambda x: -x["count"]
+            )
+
+            # ── Langues sous-titres ───────────────────────────────────────
+            sub_rows = conn.execute(text(f"""
+                SELECT subtitle_languages FROM video_metadata
+                WHERE {file_filter} AND subtitle_languages IS NOT NULL
+            """), params).fetchall()
+
+            no_sub = conn.execute(text(f"""
+                SELECT COUNT(*) FROM video_metadata
+                WHERE {file_filter}
+                AND (subtitle_languages IS NULL OR subtitle_languages = '')
+            """), params).fetchone()[0]
+
+            sub_lang_counts = {}
+            for row in sub_rows:
+                for lang in row[0].split(";"):
+                    l = lang.strip().lower()
+                    if l:
+                        name = _resolve_lang(l)
+                        sub_lang_counts[name] = sub_lang_counts.get(name, 0) + 1
+            sub_langs_out = sorted(
+                [{"label": k, "count": v} for k, v in sub_lang_counts.items()],
+                key=lambda x: -x["count"]
+            )
+
+            # ── Titres détectés (1er niveau de dossier) ───────────────────
+            titles_rows = conn.execute(text(f"""
+                SELECT
+                    SPLIT_PART(mf.path_relative, '/', 1) as title,
+                    COUNT(*) as cnt,
+                    ROUND(SUM(mf.size_bytes)/1073741824::numeric, 2) as size_gb
+                FROM media_files mf
+                WHERE {path_filter} AND mf.status = 'analyzed'
+                GROUP BY title
+                ORDER BY title
+            """), params).fetchall()
+
+            titles_out = [{"name": r[0], "count": r[1], "size_gb": float(r[2] or 0)} for r in titles_rows]
+            nb_titles = len(titles_out)
+
+            # ── Taille totale ─────────────────────────────────────────────
+            totals = conn.execute(text(f"""
+                SELECT
+                    COUNT(*)                                           as total,
+                    ROUND(SUM(vm.duration_seconds)/3600)               as total_hours,
+                    ROUND(AVG(mf.size_bytes)/1073741824::numeric, 2)   as avg_size_gb,
+                    ROUND(SUM(mf.size_bytes)/1099511627776::numeric, 2) as total_tb
+                FROM video_metadata vm
+                JOIN media_files mf ON mf.id = vm.file_id
+                WHERE {path_filter.replace('mf.mount_id', 'mf.mount_id')}
+            """), params).fetchone()
+
+            # ── Répartition par catégorie (global seulement) ──────────────
+            by_category = []
+            if not cat_id:
+                cat_rows = conn.execute(text("""
+                    SELECT c.id, c.name, COUNT(mf.id) as cnt
+                    FROM categories c
+                    LEFT JOIN mounts m ON m.category_id = c.id
+                    LEFT JOIN media_files mf ON mf.mount_id = m.id
+                    GROUP BY c.id, c.name
+                    ORDER BY cnt DESC
+                """)).fetchall()
+                by_category = [
+                    {"id": r[0], "name": r[1], "count": r[2]}
+                    for r in cat_rows
+                ]
+
+        return JSONResponse({
+            "cat_id":       cat_id,
+            "total":        totals[0] or 0,
+            "total_hours":  float(totals[1] or 0),
+            "avg_size_gb":  float(totals[2] or 0),
+            "total_tb":     float(totals[3] or 0),
+            "codecs":       [{"label": r[0], "count": r[1]} for r in codecs],
+            "resolutions":  [{"label": r[0], "count": r[1]} for r in resolutions],
+            "hdr":          [{"label": r[0], "count": r[1]} for r in hdr],
+            "audio_codecs": audio_codecs_out,
+            "audio_langs":  audio_langs_out,
+            "audio_channels": channels_out,
+            "sub_langs":    sub_langs_out,
+            "no_sub_count": int(no_sub),
+            "titles":       titles_out,
+            "nb_titles": nb_titles,
+            "by_category":  by_category,
+        })
+
+    except Exception as e:
+        logger.error(f"files_quality_stats: {e}")
         raise HTTPException(500, str(e))

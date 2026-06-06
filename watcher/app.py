@@ -291,6 +291,59 @@ def get_dashboard():
     # Statut montages
     mounts_info = get_mounts_info()
 
+    # ── Données BDD enrichies ──────────────────────────────────────────────
+    library_stats = {}
+    db_size       = "—"
+    try:
+        with engine.connect() as conn:
+            # Taille de la BDD
+            db_row = conn.execute(text(
+                "SELECT pg_size_pretty(pg_database_size(current_database()))"
+            )).fetchone()
+            db_size = db_row[0] if db_row else "—"
+
+            # Fichiers : total, missing, duplicate
+            status_rows = conn.execute(text("""
+                SELECT status, disk_status, COUNT(*)
+                FROM media_files
+                GROUP BY status, disk_status
+            """)).fetchall()
+
+            total_files    = sum(r[2] for r in status_rows)
+            analyzed_files = sum(r[2] for r in status_rows if r[0] == 'analyzed')
+            missing_files  = sum(r[2] for r in status_rows if r[1] == 'missing')
+            duplicate_files= sum(r[2] for r in status_rows if r[1] == 'duplicate')
+
+            # Poids total
+            size_row = conn.execute(text(
+                "SELECT ROUND(SUM(size_bytes)/1099511627776::numeric, 2) FROM media_files"
+            )).fetchone()
+            total_tb = float(size_row[0] or 0)
+
+            # Bibliothèque : nb titres + durée totale
+            titles_row = conn.execute(text("""
+                SELECT
+                    COUNT(DISTINCT SPLIT_PART(path_relative, '/', 1)) as nb_titles,
+                    ROUND(SUM(vm.duration_seconds) / 3600)             as total_hours
+                FROM media_files mf
+                LEFT JOIN video_metadata vm ON vm.file_id = mf.id
+                WHERE mf.status = 'analyzed'
+            """)).fetchone()
+            nb_titles   = int(titles_row[0] or 0)
+            total_hours = float(titles_row[1] or 0)
+
+            library_stats = {
+                "total_files":     total_files,
+                "analyzed_files":  analyzed_files,
+                "missing_files":   missing_files,
+                "duplicate_files": duplicate_files,
+                "total_tb":        total_tb,
+                "nb_titles":       nb_titles,
+                "total_hours":     total_hours,
+            }
+    except Exception as e:
+        logger.warning(f"get_dashboard library_stats: {e}")
+
     
     return JSONResponse({
         "version":        APP_VERSION,
@@ -310,7 +363,8 @@ def get_dashboard():
                 "name": "PostgreSQL",
                 "status": "connected" if db_ok else "disconnected",
                 "type": "PostgreSQL 16",
-                "database": "mediamanager_db"
+                "database": "mediamanager_db",
+                "size":     db_size
             },
             "mounts": {
                 "name": "SMB Mounts",
@@ -320,6 +374,7 @@ def get_dashboard():
                 "failed": mounts_info["failed"]
             }
         },
+        "library": library_stats,
         "system": {
             "host": get_hostname(),
             "ip": get_local_ip(),
