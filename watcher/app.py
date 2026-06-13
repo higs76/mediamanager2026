@@ -61,28 +61,74 @@ else:
 # ==========================================
 def init_database_tables():
     """
-    Crée les tables si elles n'existent pas (idempotent).
-    Exécute database/schema.sql statement par statement.
+    1. Exécute database/schema.sql (structure, idempotent)
+    2. Applique les migrations non encore exécutées depuis database/migrations/
+       Chaque migration est tracée dans la table schema_migrations.
     """
+    import psycopg2
+    from watcher.config import DATABASE_URL
+
+    def _get_conn():
+        conn = psycopg2.connect(DATABASE_URL)
+        conn.autocommit = True
+        conn.set_client_encoding('UTF8')
+        return conn
+
+    # ── 1. Schema principal ───────────────────────────────────────────────
     schema_file = PROJECT_ROOT / 'database' / 'schema.sql'
     if not schema_file.exists():
         logger.warning(f"⚠ schema.sql non trouvé : {schema_file}")
         return
     try:
-        import psycopg2
-        from watcher.config import DATABASE_URL
-        # encoding='utf-8' obligatoire : schema.sql contient des caractères
-        # accentués dans les commentaires, et le LXC peut être en locale ASCII
         sql = schema_file.read_text(encoding='utf-8')
-        conn = psycopg2.connect(DATABASE_URL)
-        conn.autocommit = True
-        conn.set_client_encoding('UTF8')
+        conn = _get_conn()
         with conn.cursor() as cur:
             cur.execute(sql)
         conn.close()
         logger.info("✓ Tables BDD vérifiées / créées")
     except Exception as e:
         logger.error(f"✗ Erreur init tables : {e}")
+        return
+
+    # ── 2. Migrations ─────────────────────────────────────────────────────
+    migrations_dir = PROJECT_ROOT / 'database' / 'migrations'
+    if not migrations_dir.exists():
+        return
+
+    migration_files = sorted(migrations_dir.glob('*.sql'))
+    if not migration_files:
+        return
+
+    try:
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            # Récupérer les migrations déjà appliquées
+            cur.execute("SELECT version FROM schema_migrations")
+            applied = {row[0] for row in cur.fetchall()}
+
+        for mf in migration_files:
+            version = mf.stem   # ex: "001_initial_data"
+            if version in applied:
+                logger.debug(f"Migration {version} déjà appliquée")
+                continue
+
+            logger.info(f"Application migration : {version}")
+            try:
+                sql = mf.read_text(encoding='utf-8')
+                with conn.cursor() as cur:
+                    cur.execute(sql)
+                    cur.execute(
+                        "INSERT INTO schema_migrations (version) VALUES (%s)",
+                        (version,)
+                    )
+                logger.info(f"✓ Migration {version} appliquée")
+            except Exception as e:
+                logger.error(f"✗ Erreur migration {version} : {e}")
+
+        conn.close()
+
+    except Exception as e:
+        logger.error(f"✗ Erreur système migrations : {e}")
 
 
 def ensure_system_dependencies():

@@ -189,3 +189,5 @@ git checkout dev && git merge main
 - Python 3.12+
 - PostgreSQL 15+
 - Ubuntu 24.04 (dans le LXC)
+
+# ![Dashboard](docs/screenshots/dashboard.png)

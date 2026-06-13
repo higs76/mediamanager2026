@@ -72,7 +72,7 @@ Write-Host "[OK] Connexion SSH etablie" -ForegroundColor Green
 $Items = @(
     "watcher",
     "frontend",
-    "database\schema.sql",
+    "database",
     "scripts\proxmox-install.sh",
     "scripts\mediamanager-proxmox.sh",
     "scripts\mediamanager-watcher.service",
