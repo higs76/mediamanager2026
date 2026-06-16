@@ -20,7 +20,7 @@ const Library = (() => {
     el.innerHTML = `<div class="empty-state"><span class="spinner"></span></div>`;
 
     try {
-      const r = await fetch(`${API}/api/admin/library/categories`);
+      const r = await fetch(`${API}/api/admin/library/categories/stats`);
       _categories = await r.json();
       _renderCategories();
     } catch(e) {
@@ -31,7 +31,9 @@ const Library = (() => {
 
   function _renderCategories() {
     const el = document.getElementById('library-content');
-    if (!_categories.length) {
+    const visible = _categories.filter(c => c.title_count > 0 || c.file_count > 0);
+
+    if (!visible.length) {
       el.innerHTML = `<div class="empty-state">
         <i class="bi bi-collection"></i> Aucune catégorie</div>`;
       return;
@@ -41,27 +43,99 @@ const Library = (() => {
       <div class="breadcrumb">
         <i class="bi bi-house"></i> Bibliothèque
       </div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
-        ${_categories.map(c => `
-          <div class="card" onclick="Library.openCategory(${c.id})"
-               style="cursor:pointer;transition:border-color .15s"
-               onmouseover="this.style.borderColor='var(--blue)'"
-               onmouseout="this.style.borderColor='var(--border)'">
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-              <div style="display:flex;align-items:center;gap:8px">
-                <i class="bi bi-${c.has_seasons ? 'tv' : 'film'}"
-                   style="font-size:18px;color:var(--blue)"></i>
-                <span style="font-weight:600;font-size:14px">${esc(cap(c.name))}</span>
-              </div>
-              <span class="badge badge-info">${c.has_seasons ? 'Saisonnable' : 'Film'}</span>
-            </div>
-            <div style="display:flex;gap:16px;font-size:12px;color:var(--muted)">
-              <span><strong style="color:var(--text)">${c.title_count.toLocaleString('fr-FR')}</strong> titres</span>
-              <span><strong style="color:var(--text)">${c.file_count.toLocaleString('fr-FR')}</strong> fichiers</span>
-            </div>
-          </div>`).join('')}
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px">
+        ${visible.map(c => _categoryCardHtml(c)).join('')}
       </div>`;
   }
+
+function _categoryCardHtml(c) {
+    const tb     = c.total_tb >= 1
+      ? `${c.total_tb} To`
+      : `${Math.round(c.total_tb * 1024)} Go`;
+    const icon   = c.has_seasons ? 'bi-tv' : 'bi-film';
+    const badge  = c.has_seasons
+      ? `<span style="font-size:11px;padding:2px 8px;border-radius:20px;
+             background:rgba(88,166,255,.15);color:var(--blue);
+             border:1px solid rgba(88,166,255,.3)">Saisonnable</span>`
+      : `<span style="font-size:11px;padding:2px 8px;border-radius:20px;
+             background:var(--bg3);color:var(--muted);
+             border:1px solid var(--border)">Film</span>`;
+
+    const resHtml = c.resolutions.map(r => `
+      <div style="display:flex;align-items:center;justify-content:space-between;font-size:12px;margin-bottom:3px">
+        <span style="color:var(--muted)">${esc(r.label)}</span>
+        <span style="font-weight:500">${r.pct}%</span>
+      </div>
+      <div style="height:3px;background:var(--bg3);border-radius:2px;margin-bottom:5px">
+        <div style="width:${r.pct}%;height:100%;background:var(--blue);border-radius:2px"></div>
+      </div>`).join('');
+
+    const codHtml = c.codecs.map(r => `
+      <div style="display:flex;align-items:center;justify-content:space-between;font-size:12px;margin-bottom:3px">
+        <span style="color:var(--muted)">${esc(r.label)}</span>
+        <span style="font-weight:500">${r.pct}%</span>
+      </div>
+      <div style="height:3px;background:var(--bg3);border-radius:2px;margin-bottom:5px">
+        <div style="width:${r.pct}%;height:100%;background:var(--purple);border-radius:2px"></div>
+      </div>`).join('');
+
+    return `
+      <div style="background:var(--card-bg);border:1px solid var(--border);
+           border-radius:var(--radius-lg);overflow:hidden;cursor:pointer;
+           transition:border-color .15s"
+           onclick="Library.openCategory(${c.id})"
+           onmouseover="this.style.borderColor='var(--blue)'"
+           onmouseout="this.style.borderColor='var(--border)'">
+
+        <!-- En-tête -->
+        <div style="display:flex;align-items:center;justify-content:space-between;
+             padding:12px 14px;border-bottom:1px solid var(--border)">
+          <div style="display:flex;align-items:center;gap:8px">
+            <i class="bi ${icon}" style="font-size:18px;color:var(--blue)"></i>
+            <span style="font-weight:600;font-size:14px">${esc(cap(c.name))}</span>
+          </div>
+          ${badge}
+        </div>
+
+        <!-- Titres / Fichiers / Taille -->
+        <div style="padding:12px 14px;border-bottom:1px solid var(--border)">
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <div style="display:flex;flex-direction:column;gap:5px">
+              <div style="display:flex;align-items:center;gap:6px;font-size:13px">
+                <i class="bi bi-collection-play" style="color:var(--muted);font-size:14px"></i>
+                <strong>${c.title_count.toLocaleString('fr-FR')}</strong>
+                <span style="color:var(--muted)">titres</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:6px;font-size:13px">
+                <i class="bi bi-files" style="color:var(--muted);font-size:14px"></i>
+                <strong>${c.file_count.toLocaleString('fr-FR')}</strong>
+                <span style="color:var(--muted)">fichiers</span>
+              </div>
+            </div>
+            <div style="text-align:right">
+              <i class="bi bi-database" style="font-size:18px;color:var(--muted);display:block;margin-bottom:2px"></i>
+              <span style="font-size:18px;font-weight:600">${tb}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Résolutions + Codecs -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;padding:10px 14px;gap:14px">
+          <div>
+            <div style="font-size:10px;color:var(--muted);text-transform:uppercase;
+                 letter-spacing:.04em;margin-bottom:7px">Résolutions</div>
+            ${resHtml || '<span style="font-size:11px;color:var(--muted)">—</span>'}
+          </div>
+          <div>
+            <div style="font-size:10px;color:var(--muted);text-transform:uppercase;
+                 letter-spacing:.04em;margin-bottom:7px">Codecs</div>
+            ${codHtml || '<span style="font-size:11px;color:var(--muted)">—</span>'}
+          </div>
+        </div>
+
+      </div>`;
+  }
+
 
   /* ── Titres ───────────────────────────────────────────────────────────── */
   async function openCategory(catId) {

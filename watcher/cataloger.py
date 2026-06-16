@@ -113,7 +113,7 @@ def extract_episode_title(filename: str) -> str | None:
             # Supprimer les tags techniques
             after = clean_name(after)
             # Supprimer les résidus très courts (1-2 lettres isolées)
-            after = re.sub(r'\b[A-Za-z]{1,2}\b', '', after)
+            #after = re.sub(r'\b[A-Za-z]{1,2}\b', '', after) #bug : supprimer les Le la ...
             after = _MULTI_SPACES.sub(' ', after).strip()
             # Supprimer les années isolées
             after = _YEAR_PLAIN.sub('', after).strip()

@@ -1667,6 +1667,79 @@ def library_categories():
     except Exception as e:
         logger.error(f"library_categories: {e}")
         raise HTTPException(500, str(e))
+    
+
+@router.get("/library/categories/stats")
+def library_categories_stats():
+    """Stats résolutions + codecs + taille par catégorie pour les cartes bibliothèque."""
+    try:
+        with engine.connect() as conn:
+            cats = conn.execute(text("""
+                SELECT c.id, c.name, c.has_seasons,
+                       COUNT(DISTINCT mt.id)  as title_count,
+                       COUNT(DISTINCT mi.id)  as file_count,
+                       ROUND(SUM(mf.size_bytes)/1099511627776::numeric, 2) as total_tb
+                FROM categories c
+                LEFT JOIN mounts m    ON m.category_id = c.id
+                LEFT JOIN media_titles mt ON mt.mount_id = m.id
+                LEFT JOIN media_items  mi ON mi.title_id = mt.id
+                LEFT JOIN media_files  mf ON mf.id = mi.file_id
+                GROUP BY c.id, c.name, c.has_seasons
+                ORDER BY c.name
+            """)).fetchall()
+
+            result = []
+            for cat in cats:
+                cat_id = cat[0]
+
+                # Résolutions top 5
+                res_rows = conn.execute(text("""
+                    SELECT
+                        CASE
+                            WHEN vm.video_height >= 2160 THEN '4K'
+                            WHEN vm.video_height >= 1080 THEN '1080p'
+                            WHEN vm.video_height >= 720  THEN '720p'
+                            ELSE 'SD'
+                        END as label,
+                        COUNT(*) as cnt
+                    FROM video_metadata vm
+                    JOIN media_files mf ON mf.id = vm.file_id
+                    JOIN mounts m ON m.id = mf.mount_id
+                    WHERE m.category_id = :cid AND vm.video_height IS NOT NULL
+                    GROUP BY label ORDER BY cnt DESC LIMIT 5
+                """), {"cid": cat_id}).fetchall()
+
+                total_res = sum(r[1] for r in res_rows) or 1
+                resolutions = [{"label": r[0], "pct": round(r[1]/total_res*100)} for r in res_rows]
+
+                # Codecs top 5
+                cod_rows = conn.execute(text("""
+                    SELECT vm.video_codec, COUNT(*) as cnt
+                    FROM video_metadata vm
+                    JOIN media_files mf ON mf.id = vm.file_id
+                    JOIN mounts m ON m.id = mf.mount_id
+                    WHERE m.category_id = :cid AND vm.video_codec IS NOT NULL
+                    GROUP BY vm.video_codec ORDER BY cnt DESC LIMIT 5
+                """), {"cid": cat_id}).fetchall()
+
+                total_cod = sum(r[1] for r in cod_rows) or 1
+                codecs = [{"label": r[0].upper(), "pct": round(r[1]/total_cod*100)} for r in cod_rows]
+
+                result.append({
+                    "id":          cat[0],
+                    "name":        cat[1],
+                    "has_seasons": cat[2],
+                    "title_count": cat[3],
+                    "file_count":  cat[4],
+                    "total_tb":    float(cat[5] or 0),
+                    "resolutions": resolutions,
+                    "codecs":      codecs,
+                })
+
+        return JSONResponse(result)
+    except Exception as e:
+        logger.error(f"library_categories_stats: {e}")
+        raise HTTPException(500, str(e))
 
 @router.get("/library/titles")
 def library_titles(category_id: int, search: str = None):
