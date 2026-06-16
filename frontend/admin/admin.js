@@ -205,6 +205,55 @@ async function updateDashStats(d) {
       setText('stat-db-size',    d.services?.database?.size ?? '—');
       setText('stat-db-missing', lib.missing_files ?? 0);
 
+// ── Jobs ──────────────────────────────────────────────────────────────────
+  try {
+    const rj = await fetch(`${API}/api/admin/jobs/status`);
+    const j  = await rj.json();
+
+    const lines = [];
+
+    // Scanner
+    const sc = j.scanner ?? {};
+    if (sc.last_status === 'running') {
+      lines.push(`<span style="color:var(--blue)">⟳ Scanner actif</span>`);
+    } else if (sc.last_finished) {
+      lines.push(`✓ Scanner — ${sc.files_new ?? 0} nouveaux`);
+    }
+
+    // Analyser
+    const an = j.analyzer ?? {};
+    if (an.running) {
+      const pct = an.current_total > 0
+        ? Math.round(an.current_done / an.current_total * 100) : 0;
+      lines.push(`<span style="color:var(--blue)">⟳ Analyser ${pct}% — ${an.current_folder?.split('/').pop() ?? ''}</span>`);
+    } else if (an.sessions_pending > 0) {
+      lines.push(`⏳ Analyser — ${an.sessions_pending} session(s) en attente`);
+    } else {
+      lines.push(`✓ Analyser — ${an.sessions_done} sessions terminées`);
+    }
+
+    // Catalogueur
+    const ca = j.cataloger ?? {};
+    if (ca.titles_pending > 0) {
+      lines.push(`⟳ Catalogueur en cours…`);
+    } else {
+      lines.push(`✓ Catalogue — ${(ca.titles_ok ?? 0).toLocaleString('fr-FR')} titres · ${(ca.proposals_pending ?? 0).toLocaleString('fr-FR')} propositions`);
+    }
+
+    const detail = document.getElementById('jobs-detail');
+    if (detail) detail.innerHTML = lines.join('<br>');
+
+    const ind = document.getElementById('jobs-indicator');
+    const hasActive = (j.analyzer?.running || j.cataloger?.titles_pending > 0);
+    if (ind) {
+      ind.textContent = hasActive ? '● actif' : '● ok';
+      ind.style.color = hasActive ? 'var(--blue)' : 'var(--green)';
+    }
+
+  } catch(e) {
+    console.warn('jobs/status:', e.message);
+  }      
+
 }
 
 async function svcAction(svc, action) {

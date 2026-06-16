@@ -30,7 +30,9 @@ router = APIRouter(prefix="/api/admin")
 # ── Schémas Pydantic ──────────────────────────────────────────────────────────
 
 class CategoryCreate(BaseModel):
-    name: str
+    name:        str
+    has_seasons: bool = True
+    template_id: Optional[int] = None
 
 class MountCreate(BaseModel):
     mount_type:    str            # "smb" ou "nfs"
@@ -185,23 +187,22 @@ def update_config(key: str, data: dict = Body(...)):
 def list_categories():
     try:
         with engine.connect() as conn:
-            rows = conn.execute(text(
-                "SELECT id, name FROM categories ORDER BY name"
-            )).fetchall()
-        cats = [{"id": r[0], "name": r[1]} for r in rows]
+            rows = conn.execute(text("""
+                SELECT id, name, has_seasons, template_id
+                FROM categories ORDER BY name
+            """)).fetchall()
+        cats = [{"id": r[0], "name": r[1], "has_seasons": r[2], "template_id": r[3]} for r in rows]
         return JSONResponse({
             "categories": [c["name"] for c in cats],
             "detail":     cats
         })
     except Exception as e:
         err = str(e)
-        # Table absente = BDD pas encore initialisée → retourner vide, pas 500
         if "does not exist" in err or "UndefinedTable" in err:
             logger.warning("categories: table absente, init BDD en attente")
             return JSONResponse({"categories": [], "detail": []})
         logger.error(f"list_categories: {e}")
         raise HTTPException(500, err)
-
 
 @router.post("/categories", status_code=201)
 def create_category(payload: CategoryCreate):
@@ -215,17 +216,160 @@ def create_category(payload: CategoryCreate):
             ).fetchone()
             if existing:
                 raise HTTPException(400, f"La catégorie '{name}' existe déjà")
-            row = conn.execute(
-                text("INSERT INTO categories (name) VALUES (:n) RETURNING id, name"),
-                {"n": name}
-            ).fetchone()
+
+            # Si pas de template fourni, prendre le premier par défaut
+            # selon le type saisonnable/non
+            template_id = payload.template_id
+            if not template_id:
+                tpl_type = 'seasonal' if payload.has_seasons else 'noseasonal'
+                tpl_row = conn.execute(text("""
+                    SELECT id FROM naming_templates
+                    WHERE type = :t AND is_default = true
+                    ORDER BY id LIMIT 1
+                """), {"t": tpl_type}).fetchone()
+                if tpl_row:
+                    template_id = tpl_row[0]
+
+            row = conn.execute(text("""
+                INSERT INTO categories (name, has_seasons, template_id)
+                VALUES (:n, :hs, :tid)
+                RETURNING id, name, has_seasons, template_id
+            """), {
+                "n":   name,
+                "hs":  payload.has_seasons,
+                "tid": template_id,
+            }).fetchone()
             conn.commit()
-        return JSONResponse({"id": row[0], "name": row[1]})
+        return JSONResponse({
+            "id":          row[0],
+            "name":        row[1],
+            "has_seasons": row[2],
+            "template_id": row[3],
+        })
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"create_category: {e}")
         raise HTTPException(500, str(e))
+
+@router.get("/naming-templates")
+def list_naming_templates(type: str = None):
+    """
+    Retourne les templates de nommage.
+    type : 'seasonal' | 'noseasonal' | None (tous)
+    """
+    try:
+        with engine.connect() as conn:
+            if type:
+                rows = conn.execute(text("""
+                    SELECT id, type, is_default,
+                           sep1, sep2, prefix_season, digits_season,
+                           sep_se, prefix_episode, digits_episode,
+                           folder_prefix, folder_digits, special_folder,
+                           sep_year, year_format, bonus_folder
+                    FROM naming_templates
+                    WHERE type = :t ORDER BY is_default DESC, id
+                """), {"t": type}).fetchall()
+            else:
+                rows = conn.execute(text("""
+                    SELECT id, type, is_default,
+                           sep1, sep2, prefix_season, digits_season,
+                           sep_se, prefix_episode, digits_episode,
+                           folder_prefix, folder_digits, special_folder,
+                           sep_year, year_format, bonus_folder
+                    FROM naming_templates
+                    ORDER BY type, is_default DESC, id
+                """)).fetchall()
+
+        def _preview(r):
+            """Génère un exemple de nom de fichier pour ce template."""
+            if r[1] == 'seasonal':
+                sep1    = r[3] or ' - '
+                sep2    = r[4] or ' - '
+                prefS   = r[5] or ''
+                digS    = r[6] or 2
+                sepSE   = r[7] or 'x'
+                prefE   = r[8] or ''
+                digE    = r[9] or 2
+                s = str(1).zfill(digS)
+                e = str(1).zfill(digE)
+                return f"Série{sep1}{prefS}{s}{sepSE}{prefE}{e}{sep2}Titre.mkv"
+            else:
+                sep  = r[13] or ' '
+                fmt  = r[14] or 'paren'
+                year = '(2010)' if fmt == 'paren' else '2010' if fmt == 'plain' else ''
+                return f"Titre{sep}{year}.mkv" if year else "Titre.mkv"
+
+        return JSONResponse([{
+            "id":             r[0],
+            "type":           r[1],
+            "is_default":     r[2],
+            "sep1":           r[3],
+            "sep2":           r[4],
+            "prefix_season":  r[5],
+            "digits_season":  r[6],
+            "sep_se":         r[7],
+            "prefix_episode": r[8],
+            "digits_episode": r[9],
+            "folder_prefix":  r[10],
+            "folder_digits":  r[11],
+            "special_folder": r[12],
+            "sep_year":       r[13],
+            "year_format":    r[14],
+            "bonus_folder":   r[15],
+            "preview":        _preview(r),
+        } for r in rows])
+    except Exception as e:
+        logger.error(f"list_naming_templates: {e}")
+        raise HTTPException(500, str(e))
+    
+@router.post("/naming-templates", status_code=201)
+def create_naming_template(data: dict = Body(...)):
+    """Crée un nouveau template de nommage utilisateur."""
+    tpl_type = (data.get("type") or "").strip()
+    if tpl_type not in ("seasonal", "noseasonal"):
+        raise HTTPException(400, "type doit être 'seasonal' ou 'noseasonal'")
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(text("""
+                INSERT INTO naming_templates (
+                    type, is_default,
+                    sep1, sep2, prefix_season, digits_season,
+                    sep_se, prefix_episode, digits_episode,
+                    folder_prefix, folder_digits, special_folder,
+                    sep_year, year_format, bonus_folder
+                ) VALUES (
+                    :type, false,
+                    :sep1, :sep2, :prefix_season, :digits_season,
+                    :sep_se, :prefix_episode, :digits_episode,
+                    :folder_prefix, :folder_digits, :special_folder,
+                    :sep_year, :year_format, :bonus_folder
+                )
+                RETURNING id
+            """), {
+                "type":           tpl_type,
+                "sep1":           data.get("sep1"),
+                "sep2":           data.get("sep2"),
+                "prefix_season":  data.get("prefix_season"),
+                "digits_season":  data.get("digits_season"),
+                "sep_se":         data.get("sep_se"),
+                "prefix_episode": data.get("prefix_episode"),
+                "digits_episode": data.get("digits_episode"),
+                "folder_prefix":  data.get("folder_prefix"),
+                "folder_digits":  data.get("folder_digits"),
+                "special_folder": data.get("special_folder"),
+                "sep_year":       data.get("sep_year"),
+                "year_format":    data.get("year_format"),
+                "bonus_folder":   data.get("bonus_folder"),
+            }).fetchone()
+            conn.commit()
+        return JSONResponse({"id": row[0]})
+    except Exception as e:
+        err = str(e)
+        if "unique" in err.lower() or "UNIQUE" in err:
+            raise HTTPException(400, "Ce template existe déjà")
+        logger.error(f"create_naming_template: {e}")
+        raise HTTPException(500, err)    
 
 
 # ── Montages ──────────────────────────────────────────────────────────────────
@@ -1207,24 +1351,30 @@ def files_quality_stats(cat_id: int = None):
 
             # ── Filtre catégorie ──────────────────────────────────────────
             if cat_id:
-                where_mf  = "WHERE mf.mount_id IN (SELECT id FROM mounts WHERE category_id = :cat_id)"
-                where_vm  = """WHERE vm.file_id IN (
-                                SELECT mf.id FROM media_files mf
-                                JOIN mounts m ON m.id = mf.mount_id
-                                WHERE m.category_id = :cat_id)"""
+                where_mf    = "JOIN mounts mcat ON mcat.id = mf.mount_id AND mcat.category_id = :cat_id"
+                file_filter = """EXISTS (
+                    SELECT 1 FROM media_files mf2
+                    JOIN mounts mcat2 ON mcat2.id = mf2.mount_id
+                    WHERE mf2.id = video_metadata.file_id AND mcat2.category_id = :cat_id
+                )"""
+                path_filter = """EXISTS (
+                    SELECT 1 FROM mounts mcat3
+                    WHERE mcat3.id = mf.mount_id AND mcat3.category_id = :cat_id
+                )"""
                 params = {"cat_id": cat_id}
             else:
-                where_mf = ""
-                where_vm = ""
-                params   = {}
+                where_mf    = ""
+                file_filter = "1=1"
+                path_filter = "1=1"
+                params      = {}
 
             # ── Codecs vidéo ──────────────────────────────────────────────
             codecs = conn.execute(text(f"""
                 SELECT video_codec, COUNT(*) as cnt
                 FROM video_metadata vm
                 JOIN media_files mf ON mf.id = vm.file_id
-                {where_mf.replace('WHERE mf.', 'WHERE mf.')}
-                {'WHERE' if not where_mf else 'AND'} video_codec IS NOT NULL
+                {where_mf}
+                WHERE video_codec IS NOT NULL
                 GROUP BY video_codec ORDER BY cnt DESC
             """), params).fetchall()
 
@@ -1240,8 +1390,8 @@ def files_quality_stats(cat_id: int = None):
                     COUNT(*) as cnt
                 FROM video_metadata vm
                 JOIN media_files mf ON mf.id = vm.file_id
-                {where_mf.replace('WHERE mf.', 'WHERE mf.')}
-                {'WHERE' if not where_mf else 'AND'} video_height IS NOT NULL
+                {where_mf}
+                WHERE video_height IS NOT NULL
                 GROUP BY label ORDER BY cnt DESC
             """), params).fetchall()
 
@@ -1250,24 +1400,11 @@ def files_quality_stats(cat_id: int = None):
                 SELECT hdr_format, COUNT(*) as cnt
                 FROM video_metadata vm
                 JOIN media_files mf ON mf.id = vm.file_id
-                {where_mf.replace('WHERE mf.', 'WHERE mf.')}
-                {'WHERE' if not where_mf else 'AND'} hdr_format IS NOT NULL
+                {where_mf}
+                WHERE hdr_format IS NOT NULL
                 GROUP BY hdr_format ORDER BY cnt DESC
             """), params).fetchall()
-
-            # Sous-requête de filtre réutilisable
-            if cat_id:
-                file_filter = """file_id IN (
-                    SELECT mf.id FROM media_files mf
-                    JOIN mounts m ON m.id = mf.mount_id
-                    WHERE m.category_id = :cat_id
-                )"""
-                path_filter = """mf.mount_id IN (
-                    SELECT id FROM mounts WHERE category_id = :cat_id
-                )"""
-            else:
-                file_filter = "1=1"
-                path_filter = "1=1"
+            
 
             # ── Codecs audio ──────────────────────────────────────────────
             audio_rows = conn.execute(text(f"""
@@ -1363,13 +1500,13 @@ def files_quality_stats(cat_id: int = None):
             # ── Taille totale ─────────────────────────────────────────────
             totals = conn.execute(text(f"""
                 SELECT
-                    COUNT(*)                                           as total,
-                    ROUND(SUM(vm.duration_seconds)/3600)               as total_hours,
-                    ROUND(AVG(mf.size_bytes)/1073741824::numeric, 2)   as avg_size_gb,
+                    COUNT(*)                                            as total,
+                    ROUND(SUM(vm.duration_seconds)/3600)                as total_hours,
+                    ROUND(AVG(mf.size_bytes)/1073741824::numeric, 2)    as avg_size_gb,
                     ROUND(SUM(mf.size_bytes)/1099511627776::numeric, 2) as total_tb
                 FROM video_metadata vm
                 JOIN media_files mf ON mf.id = vm.file_id
-                WHERE {path_filter.replace('mf.mount_id', 'mf.mount_id')}
+                {where_mf}
             """), params).fetchone()
 
             # ── Répartition par catégorie (global seulement) ──────────────
@@ -1409,4 +1546,242 @@ def files_quality_stats(cat_id: int = None):
 
     except Exception as e:
         logger.error(f"files_quality_stats: {e}")
+        raise HTTPException(500, str(e))
+    
+@router.get("/jobs/status")
+def jobs_status():
+    """Retourne l'état actuel des 3 jobs : scanner, analyser, catalogueur."""
+    try:
+        with engine.connect() as conn:
+
+            # Dernier scan job
+            last_scan = conn.execute(text("""
+                SELECT j.status, j.started_at, j.finished_at,
+                       j.files_found, j.files_new, m.local_path
+                FROM scan_jobs j
+                JOIN mounts m ON m.id = j.mount_id
+                ORDER BY j.created_at DESC LIMIT 1
+            """)).fetchone()
+
+            # Session analyser en cours
+            running_session = conn.execute(text("""
+                SELECT a.status, a.folder_path, a.files_done,
+                       a.files_total, a.started_at
+                FROM analyze_sessions a
+                WHERE a.status = 'running'
+                ORDER BY a.started_at DESC LIMIT 1
+            """)).fetchone()
+
+            # Dernière session terminée
+            last_session = conn.execute(text("""
+                SELECT a.status, a.folder_path, a.files_done,
+                       a.files_total, a.finished_at
+                FROM analyze_sessions a
+                WHERE a.status = 'done'
+                ORDER BY a.finished_at DESC LIMIT 1
+            """)).fetchone()
+
+            # Stats analyser globales
+            analyze_stats = conn.execute(text("""
+                SELECT
+                    COUNT(*) FILTER (WHERE status='done')    as done,
+                    COUNT(*) FILTER (WHERE status='pending') as pending,
+                    COUNT(*) FILTER (WHERE status='running') as running,
+                    COUNT(*) FILTER (WHERE status='error')   as error
+                FROM analyze_sessions
+            """)).fetchone()
+
+            # Stats catalogueur
+            catalog_stats = conn.execute(text("""
+                SELECT
+                    COUNT(*) FILTER (WHERE folder_status='ok')        as ok,
+                    COUNT(*) FILTER (WHERE folder_status='to_rename') as to_rename,
+                    COUNT(*) FILTER (WHERE folder_status='pending')   as pending
+                FROM media_titles
+            """)).fetchone()
+
+            # Propositions en attente
+            proposals_pending = conn.execute(text("""
+                SELECT COUNT(*) FROM rename_proposals WHERE status='pending'
+            """)).fetchone()[0]
+
+        def fmt_dt(dt):
+            return str(dt)[:19] if dt else None
+
+        return JSONResponse({
+            "scanner": {
+                "last_status":   last_scan[0] if last_scan else None,
+                "last_started":  fmt_dt(last_scan[1]) if last_scan else None,
+                "last_finished": fmt_dt(last_scan[2]) if last_scan else None,
+                "files_found":   last_scan[3] if last_scan else 0,
+                "files_new":     last_scan[4] if last_scan else 0,
+                "last_mount":    last_scan[5].split('/')[-1] if last_scan else None,
+            },
+            "analyzer": {
+                "running":        running_session is not None,
+                "current_folder": running_session[1] if running_session else None,
+                "current_done":   running_session[2] if running_session else 0,
+                "current_total":  running_session[3] if running_session else 0,
+                "last_folder":    last_session[1] if last_session else None,
+                "last_finished":  fmt_dt(last_session[4]) if last_session else None,
+                "sessions_done":  analyze_stats[0] if analyze_stats else 0,
+                "sessions_pending": analyze_stats[1] if analyze_stats else 0,
+            },
+            "cataloger": {
+                "titles_ok":        catalog_stats[0] if catalog_stats else 0,
+                "titles_to_rename": catalog_stats[1] if catalog_stats else 0,
+                "titles_pending":   catalog_stats[2] if catalog_stats else 0,
+                "proposals_pending": proposals_pending,
+            },
+        })
+    except Exception as e:
+        logger.error(f"jobs_status: {e}")
+        raise HTTPException(500, str(e))
+    
+
+    # ── Bibliothèque utilisateur ──────────────────────────────────────────────
+
+@router.get("/library/categories")
+def library_categories():
+    """Catégories avec compteurs pour la bibliothèque utilisateur."""
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text("""
+                SELECT c.id, c.name, c.has_seasons,
+                       COUNT(DISTINCT mt.id) as title_count,
+                       COUNT(DISTINCT mi.id) as file_count
+                FROM categories c
+                LEFT JOIN mounts m   ON m.category_id = c.id
+                LEFT JOIN media_titles mt ON mt.mount_id = m.id
+                LEFT JOIN media_items  mi ON mi.title_id = mt.id
+                GROUP BY c.id, c.name, c.has_seasons
+                ORDER BY c.name
+            """)).fetchall()
+        return JSONResponse([{
+            "id":          r[0],
+            "name":        r[1],
+            "has_seasons": r[2],
+            "title_count": r[3],
+            "file_count":  r[4],
+        } for r in rows])
+    except Exception as e:
+        logger.error(f"library_categories: {e}")
+        raise HTTPException(500, str(e))
+
+@router.get("/library/titles")
+def library_titles(category_id: int, search: str = None):
+    """Titres d'une catégorie avec infos de base."""
+    try:
+        with engine.connect() as conn:
+            params = {"cat": category_id}
+            search_clause = ""
+            if search:
+                search_clause = "AND mt.display_name ILIKE :search"
+                params["search"] = f"%{search}%"
+            rows = conn.execute(text(f"""
+                    SELECT mt.id, mt.folder_name, mt.display_name,
+                        mt.year, mt.folder_status,
+                        COUNT(DISTINCT mi.id)                              as file_count,
+                        COUNT(DISTINCT mi.season)                          as season_count,
+                        COUNT(DISTINCT rp.id)
+                            FILTER (WHERE rp.status='pending')             as proposals
+                    FROM media_titles mt
+                    LEFT JOIN media_items mi ON mi.title_id = mt.id
+                    LEFT JOIN rename_proposals rp ON (
+                        rp.title_id = mt.id
+                        OR rp.item_id = mi.id
+                    )
+                    JOIN mounts m ON m.id = mt.mount_id
+                    WHERE m.category_id = :cat {search_clause}
+                    GROUP BY mt.id, mt.folder_name, mt.display_name,
+                            mt.year, mt.folder_status
+                    ORDER BY mt.display_name
+                """), params).fetchall()
+
+        return JSONResponse([{
+            "id":           r[0],
+            "folder_name":  r[1],
+            "display_name": r[2] or r[1],
+            "year":         r[3],
+            "folder_status":r[4],
+            "file_count":   r[5],
+            "season_count": r[6],
+            "proposals":    r[7],
+        } for r in rows])
+    except Exception as e:
+        logger.error(f"library_titles: {e}")
+        raise HTTPException(500, str(e))
+
+@router.get("/library/titles/{title_id}")
+def library_title_detail(title_id: int):
+    """Détail d'un titre — saisons et épisodes."""
+    try:
+        with engine.connect() as conn:            
+            title = conn.execute(text("""
+                SELECT mt.id, mt.folder_name, mt.display_name,
+                       mt.year, mt.folder_status, c.name, c.has_seasons
+                FROM media_titles mt
+                JOIN mounts m ON m.id = mt.mount_id
+                JOIN categories c ON c.id = m.category_id
+                WHERE mt.id = :id
+            """), {"id": title_id}).fetchone()
+
+            if not title:
+                raise HTTPException(404, "Titre introuvable")
+
+            items = conn.execute(text("""
+                SELECT mi.id, mi.season, mi.episode, mi.episode_title,
+                       mi.file_status, mf.filename, mf.size_bytes,
+                       vm.video_codec, vm.video_height, vm.hdr_format,
+                       vm.duration_seconds,
+                       rp.proposed_name, rp.status as prop_status, rp.id as prop_id
+                FROM media_items mi
+                JOIN media_files mf ON mf.id = mi.file_id
+                LEFT JOIN video_metadata vm ON vm.file_id = mf.id
+                LEFT JOIN rename_proposals rp ON rp.item_id = mi.id
+                    AND rp.status = 'pending'
+                WHERE mi.title_id = :tid
+                ORDER BY mi.season NULLS LAST, mi.episode NULLS LAST
+            """), {"tid": title_id}).fetchall()
+
+        # Grouper par saison
+        seasons = {}
+        for r in items:
+            s = r[1]
+            if s not in seasons:
+                seasons[s] = []
+            seasons[s].append({
+                "item_id":       r[0],
+                "season":        r[1],
+                "episode":       r[2],
+                "episode_title": r[3],
+                "file_status":   r[4],
+                "filename":      r[5],
+                "size_bytes":    r[6],
+                "codec":         r[7],
+                "height":        r[8],
+                "hdr":           r[9],
+                "duration":      r[10],
+                "proposed_name": r[11],
+                "prop_status":   r[12],
+                "prop_id":       r[13],
+            })
+
+        return JSONResponse({
+            "id":           title[0],
+            "folder_name":  title[1],
+            "display_name": title[2] or title[1],
+            "year":         title[3],
+            "folder_status":title[4],
+            "category":     title[5],
+            "has_seasons":  title[6],
+            "seasons":      {str(k): v for k, v in sorted(
+                seasons.items(),
+                key=lambda x: (x[0] is None, x[0])
+            )},
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"library_title_detail: {e}")
         raise HTTPException(500, str(e))

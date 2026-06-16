@@ -274,6 +274,24 @@ def admin_redirect():
     return RedirectResponse(url="/admin/", status_code=307)
 
 # ==========================================
+# Servir les fichiers statiques (Frontend App utilisateur)
+# ==========================================
+app_path = PROJECT_ROOT / "frontend" / "app"
+if app_path.exists():
+    app.mount("/app", StaticFiles(directory=str(app_path), html=True), name="app")
+    logger.info(f"✓ App frontend mounted at /app → {app_path}")
+else:
+    logger.warning(f"⚠ App frontend not found at {app_path}")
+
+
+@app.get("/app")
+def app_redirect():
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/app/", status_code=307)
+
+
+
+# ==========================================
 # ENDPOINTS SANTÉ
 # ==========================================
 

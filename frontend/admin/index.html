@@ -149,11 +149,19 @@
           </div>
           <div class="stats-box" id="stat-db-box">
             <div class="stats-box-title"><span>Base de données</span></div>
-            <div style="font-size:.85rem;color:var(--muted)" id="stat-db-info">
-              <div class="stat-value" id="stat-db-size">—</div>
-              <div style="font-size:.75rem;color:var(--muted);margin-top:4px">
-                Taille de la base PostgreSQL
-              </div>
+            <div id="stat-db-size" style="font-size:.85rem">—</div>
+            <div style="font-size:.75rem;color:var(--muted);margin-top:4px">
+              Taille PostgreSQL
+            </div>
+          </div>
+
+          <div class="stats-box">
+            <div class="stats-box-title">
+              <span>Jobs</span>
+              <span id="jobs-indicator" style="font-size:.72rem"></span>
+            </div>
+            <div id="jobs-detail" style="font-size:.78rem;line-height:1.8;color:var(--muted)">
+              —
             </div>
           </div>
           <div class="stats-box">
@@ -725,6 +733,201 @@
       <button class="btn" onclick="closePurge()">Annuler</button>
       <button class="btn btn-danger" id="btn-confirm-purge" onclick="executePurge()">
         <i class="bi bi-trash3"></i> Confirmer la purge
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ MODAL : Nouvelle catégorie ══════════════════════════════════════════ -->
+<div class="modal-overlay" id="overlay-new-category">
+  <div class="modal" style="max-width:520px">
+    <div class="modal-header">
+      <h3>Nouvelle catégorie</h3>
+      <button class="modal-close" onclick="Mounts.closeCategoryModal()">&times;</button>
+    </div>
+    <div class="modal-body" style="max-height:72vh;overflow-y:auto">
+
+      <!-- Nom -->
+      <div class="form-group">
+        <label class="form-label">Nom <span class="req">*</span></label>
+        <input id="newcat-name" type="text" placeholder="ex: concerts, sport…">
+        <span class="form-hint">Servira de nom de dossier dans MediaManagerMnt/</span>
+      </div>
+
+      <!-- Type -->
+      <div class="form-group">
+        <label class="form-label">Type <span class="req">*</span></label>
+        <div class="type-grid">
+          <div class="type-card active" id="newcat-type-seasonal"
+               onclick="Mounts.newcatSelectType('seasonal')">
+            <i class="bi bi-calendar3"></i>
+            <div class="type-name">Saisonnable</div>
+            <div class="type-desc">Séries, animes, documentaires</div>
+          </div>
+          <div class="type-card" id="newcat-type-noseasonal"
+               onclick="Mounts.newcatSelectType('noseasonal')">
+            <i class="bi bi-film"></i>
+            <div class="type-name">Non saisonnable</div>
+            <div class="type-desc">Films</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Template -->
+      <div class="form-group">
+        <label class="form-label">Template de nommage <span class="req">*</span></label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <select id="newcat-template" style="flex:1" onchange="Mounts.newcatSelTpl()"></select>
+          <button class="btn btn-sm" id="newcat-btn-plus"
+                  onclick="Mounts.newcatToggleForm()" title="Créer un template">
+            <i class="bi bi-plus-lg"></i>
+          </button>
+        </div>
+
+        <!-- Lecture seule -->
+        <div id="newcat-tpl-readonly" style="margin-top:6px;padding:6px 10px;
+             background:var(--card-bg);border-radius:6px;font-size:.78rem;color:var(--muted)">
+          <i class="bi bi-lock"></i> Template système — lecture seule.
+          Cliquez sur <strong>+</strong> pour créer le vôtre.
+        </div>
+
+        <!-- Sous-formulaire nouveau template -->
+        <div id="newcat-tpl-form" style="display:none;margin-top:8px;padding:12px;
+             background:var(--card-bg);border:1px solid var(--border);border-radius:8px">
+          <div style="font-size:.75rem;font-weight:600;color:var(--muted);
+               text-transform:uppercase;letter-spacing:.04em;margin-bottom:10px">
+            Nouveau template
+          </div>
+
+          <!-- Champs saisonnables -->
+          <div id="newcat-fields-seasonal">
+            <div style="font-size:.75rem;color:var(--muted);padding:4px 8px;
+                 background:var(--input-bg,rgba(255,255,255,.05));border-radius:4px;
+                 font-family:'JetBrains Mono',monospace;margin-bottom:10px">
+              {serie}{sep1}{prefS}{nn_s}{sep_se}{prefE}{nn_e}{sep2}{titre}.mkv
+            </div>
+
+            <div class="form-grid" style="margin-bottom:8px">
+              <div class="form-group" style="margin:0">
+                <label class="form-label" style="font-size:.75rem">Séparateur série → numéro</label>
+                <input id="nt-sep1" type="text" value=" - " oninput="Mounts.newcatUpdPrev()">
+              </div>
+              <div class="form-group" style="margin:0">
+                <label class="form-label" style="font-size:.75rem">Séparateur numéro → titre</label>
+                <input id="nt-sep2" type="text" value=" - " oninput="Mounts.newcatUpdPrev()">
+              </div>
+            </div>
+
+            <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-bottom:10px">
+              <div>
+                <label class="form-label" style="font-size:.72rem">Préf. saison</label>
+                <input id="nt-pref-s" type="text" placeholder="S" oninput="Mounts.newcatUpdPrev()">
+              </div>
+              <div>
+                <label class="form-label" style="font-size:.72rem">Chiffres S</label>
+                <select id="nt-dig-s" onchange="Mounts.newcatUpdPrev()">
+                  <option value="2">2 — 01</option>
+                  <option value="3">3 — 001</option>
+                </select>
+              </div>
+              <div>
+                <label class="form-label" style="font-size:.72rem">Sép. S×E</label>
+                <input id="nt-sep-se" type="text" value="x" oninput="Mounts.newcatUpdPrev()">
+              </div>
+              <div>
+                <label class="form-label" style="font-size:.72rem">Préf. épisode</label>
+                <input id="nt-pref-e" type="text" placeholder="E" oninput="Mounts.newcatUpdPrev()">
+              </div>
+              <div>
+                <label class="form-label" style="font-size:.72rem">Chiffres E</label>
+                <select id="nt-dig-e" onchange="Mounts.newcatUpdPrev()">
+                  <option value="2">2 — 01</option>
+                  <option value="3">3 — 001</option>
+                </select>
+              </div>
+            </div>
+
+            <div style="border-top:1px solid var(--border);padding-top:8px;margin-bottom:8px">
+              <div style="font-size:.75rem;font-weight:600;color:var(--muted);margin-bottom:6px">
+                Dossiers saisons
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px">
+                <div>
+                  <label class="form-label" style="font-size:.72rem">Préfixe dossier</label>
+                  <input id="nt-folder-pref" type="text" value="S"
+                         placeholder="S, Saison…" oninput="Mounts.newcatUpdPrev()">
+                </div>
+                <div>
+                  <label class="form-label" style="font-size:.72rem">Chiffres dossier</label>
+                  <select id="nt-folder-dig" onchange="Mounts.newcatUpdPrev()">
+                    <option value="2">2 — S01</option>
+                    <option value="3">3 — S001</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="form-label" style="font-size:.72rem">Dossier saison 0</label>
+                  <input id="nt-special" type="text" value="S0"
+                         oninput="Mounts.newcatUpdPrev()">
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Champs films -->
+          <div id="newcat-fields-noseasonal" style="display:none">
+            <div class="form-grid" style="margin-bottom:8px">
+              <div class="form-group" style="margin:0">
+                <label class="form-label" style="font-size:.75rem">Séparateur titre → année</label>
+                <input id="nt-sep-year" type="text" value=" " oninput="Mounts.newcatUpdPrev()">
+              </div>
+              <div class="form-group" style="margin:0">
+                <label class="form-label" style="font-size:.75rem">Format année</label>
+                <select id="nt-fmt-year" onchange="Mounts.newcatUpdPrev()">
+                  <option value="paren">(2010)</option>
+                  <option value="plain">2010</option>
+                  <option value="none">ne pas inclure</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-group" style="margin:0">
+              <label class="form-label" style="font-size:.75rem">Nom dossier bonus</label>
+              <input id="nt-bonus" type="text" value="Bonus" oninput="Mounts.newcatUpdPrev()">
+            </div>
+          </div>
+
+          <div style="display:flex;justify-content:flex-end;margin-top:10px">
+            <button class="btn btn-sm btn-primary" onclick="Mounts.newcatSaveTpl()">
+              Enregistrer le template
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Aperçu -->
+      <div style="background:var(--card-bg);border-radius:8px;padding:12px 14px">
+        <div style="font-size:.72rem;color:var(--muted);text-transform:uppercase;
+             letter-spacing:.04em;margin-bottom:8px">Aperçu</div>
+        <div id="newcat-prev-normal" style="font-family:'JetBrains Mono',monospace;
+             font-size:.82rem;margin-bottom:4px">—</div>
+        <div id="newcat-prev-special-row">
+          <span style="font-size:.72rem;color:var(--muted)">Saison spéciale : </span>
+          <span id="newcat-prev-special" style="font-family:'JetBrains Mono',monospace;
+               font-size:.82rem">—</span>
+        </div>
+        <div id="newcat-prev-bonus-row" style="display:none">
+          <span style="font-size:.72rem;color:var(--muted)">Dossier bonus : </span>
+          <span id="newcat-prev-bonus" style="font-family:'JetBrains Mono',monospace;
+               font-size:.82rem">—</span>
+        </div>
+      </div>
+
+      <div id="newcat-error" class="form-error" style="display:none;margin-top:8px"></div>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn" onclick="Mounts.closeCategoryModal()">Annuler</button>
+      <button class="btn btn-success" onclick="Mounts.saveNewCategory()">
+        <i class="bi bi-plus-lg"></i> Créer la catégorie
       </button>
     </div>
   </div>

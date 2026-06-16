@@ -195,10 +195,15 @@ def scan_mount(mount_id: int, job_id: int) -> dict:
                 continue
 
             try:
-                file_size = os.path.getsize(filepath)
+                file_size = os.path.getsize(filepath)                
             except OSError:
                 counters["errors"] += 1
                 continue
+                        
+            try:
+                file_mtime = datetime.fromtimestamp(os.path.getmtime(filepath))
+            except OSError:
+                file_mtime = datetime.now()
 
             counters["files_found"] += 1
 
@@ -216,9 +221,9 @@ def scan_mount(mount_id: int, job_id: int) -> dict:
                         conn.execute(text("""                            
                             INSERT INTO media_files
                                 (mount_id, hash_partial, path_relative, filename,
-                                extension, size_bytes, status, disk_status)
+                                extension, size_bytes, status, disk_status, file_mtime)
                             VALUES
-                                (:mid, :hash, :path, :fname, :ext, :size, 'discovered', 'present')
+                                (:mid, :hash, :path, :fname, :ext, :size, 'discovered', 'present', :mtime)
                         """), {
                             "mid":   mount_id,
                             "hash":  file_hash,
@@ -226,6 +231,7 @@ def scan_mount(mount_id: int, job_id: int) -> dict:
                             "fname": filename,
                             "ext":   ext,
                             "size":  file_size,
+                            "mtime": file_mtime
                         })
                         new_id = conn.execute(text(
                             "SELECT id FROM media_files WHERE hash_partial = :hash",

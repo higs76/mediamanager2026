@@ -592,24 +592,9 @@ const Mounts = (() => {
   }
 
   async function wizardAddCategory() {
-    const input = document.getElementById('w-newcat');
-    const name  = (input?.value || '').trim().toLowerCase();
-    if (!name) return;
-
-    try {
-      const r = await fetch(`${API}/api/admin/categories`, {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({name}),
-      });
-      if (!r.ok) throw new Error((await r.json()).detail ?? 'Erreur');
-      if (input) input.value = '';
-      // Recharger les catégories et mettre à jour la grille
-      await _loadCategories();
+    openCategoryModal(() => {
       _wizardRefreshCatSelects();
-    } catch (e) {
-      _wizardShowError(2, 'Erreur création catégorie : ' + e.message);
-    }
+    });
   }
 
   function _wizardRefreshCatSelects() {
@@ -916,6 +901,233 @@ const Mounts = (() => {
       .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
+  /* ══════════════════════════════════════════════════════════════════════════
+     MODAL — Création de catégorie
+  ══════════════════════════════════════════════════════════════════════════ */
+
+  let _newcatType      = 'seasonal';
+  let _newcatTemplates = [];
+
+  async function openCategoryModal() {
+    _newcatType = 'seasonal';
+    _setVal('newcat-name', '');
+    const errEl = document.getElementById('newcat-error');
+    if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+    document.getElementById('newcat-tpl-form').style.display    = 'none';
+    document.getElementById('newcat-tpl-readonly').style.display = '';
+
+    try {
+      const r = await fetch(`${API}/api/admin/naming-templates`);
+      _newcatTemplates = await r.json();
+    } catch(e) { _newcatTemplates = []; }
+
+    newcatSelectType('seasonal');
+    _openOverlay('overlay-new-category');
+    setTimeout(() => document.getElementById('newcat-name')?.focus(), 100);
+  }
+
+  function closeCategoryModal() {
+    _closeOverlay('overlay-new-category');
+  }
+
+  function newcatSelectType(type) {
+    _newcatType = type;
+    document.getElementById('newcat-type-seasonal')
+      ?.classList.toggle('active', type === 'seasonal');
+    document.getElementById('newcat-type-noseasonal')
+      ?.classList.toggle('active', type === 'noseasonal');
+    document.getElementById('newcat-fields-seasonal').style.display =
+      type === 'seasonal' ? '' : 'none';
+    document.getElementById('newcat-fields-noseasonal').style.display =
+      type === 'noseasonal' ? '' : 'none';
+    document.getElementById('newcat-prev-special-row').style.display =
+      type === 'seasonal' ? '' : 'none';
+    document.getElementById('newcat-prev-bonus-row').style.display =
+      type === 'noseasonal' ? '' : 'none';
+    _newcatRebuildSelect();
+  }
+
+  function _newcatRebuildSelect() {
+    const sel = document.getElementById('newcat-template');
+    if (!sel) return;
+    const filtered = _newcatTemplates.filter(t => t.type === _newcatType);
+    const defGroup = filtered.filter(t => t.is_default);
+    const usrGroup = filtered.filter(t => !t.is_default);
+    let html = '<optgroup label="Par défaut (lecture seule)">'
+      + defGroup.map(t => `<option value="${t.id}">🔒 ${_esc(t.preview)}</option>`).join('')
+      + '</optgroup>';
+    if (usrGroup.length) {
+      html += '<optgroup label="Mes templates">'
+        + usrGroup.map(t => `<option value="${t.id}">✏️ ${_esc(t.preview)}</option>`).join('')
+        + '</optgroup>';
+    }
+    sel.innerHTML = html;
+    newcatSelTpl();
+  }
+
+  function newcatSelTpl() {
+    const sel = document.getElementById('newcat-template');
+    if (!sel) return;
+    const tpl = _newcatTemplates.find(t => t.id === parseInt(sel.value));
+    const isDefault = tpl?.is_default ?? true;
+    document.getElementById('newcat-tpl-readonly').style.display = isDefault ? '' : 'none';
+    if (isDefault) document.getElementById('newcat-tpl-form').style.display = 'none';
+    // Mettre à jour l'aperçu depuis le template sélectionné
+    if (tpl) _newcatPreviewFromTpl(tpl);
+  }
+
+  function newcatToggleForm() {
+    const form = document.getElementById('newcat-tpl-form');
+    const ro   = document.getElementById('newcat-tpl-readonly');
+    const showing = form.style.display !== 'none';
+    form.style.display = showing ? 'none' : '';
+    ro.style.display   = showing ? '' : 'none';
+    if (!showing) newcatUpdPrev();
+  }
+
+  function _pad(n, d) { return String(n).padStart(parseInt(d), '0'); }
+
+  function _newcatPreviewFromTpl(tpl) {
+    if (tpl.type === 'seasonal') {
+      const sep1  = tpl.sep1 || ' - ';
+      const sep2  = tpl.sep2 || ' - ';
+      const prefS = tpl.prefix_season || '';
+      const digS  = tpl.digits_season || 2;
+      const sepSE = tpl.sep_se || 'x';
+      const prefE = tpl.prefix_episode || '';
+      const digE  = tpl.digits_episode || 2;
+      const spec  = tpl.special_folder || 'S0';
+      const s1 = _pad(1, digS); const e1 = _pad(1, digE);
+      const s0 = _pad(0, digS); const e161 = _pad(161, digE);
+      const num  = `${prefS}${s1}${sepSE}${prefE}${e1}`;
+      const num0 = `${prefS}${s0}${sepSE}${prefE}${e161}`;
+      _set('newcat-prev-normal',  `Scorpion${sep1}${num}${sep2}Pilot.mkv`);
+      _set('newcat-prev-special', `${spec}/Scorpion${sep1}${num0}${sep2}Le pouvoir du docteur.mkv`);
+    } else {
+      const sep   = tpl.sep_year || ' ';
+      const fmt   = tpl.year_format || 'paren';
+      const bonus = tpl.bonus_folder || 'Bonus';
+      const year  = fmt === 'paren' ? '(2010)' : fmt === 'plain' ? '2010' : '';
+      _set('newcat-prev-normal', year ? `Inception${sep}${year}.mkv` : 'Inception.mkv');
+      _set('newcat-prev-bonus',  `${bonus}/`);
+    }
+  }
+
+  function newcatUpdPrev() {
+    if (_newcatType === 'seasonal') {
+      const sep1  = _getVal('nt-sep1')    || ' - ';
+      const sep2  = _getVal('nt-sep2')    || ' - ';
+      const prefS = _getVal('nt-pref-s')  || '';
+      const digS  = _getVal('nt-dig-s')   || '2';
+      const sepSE = _getVal('nt-sep-se')  || 'x';
+      const prefE = _getVal('nt-pref-e')  || '';
+      const digE  = _getVal('nt-dig-e')   || '2';
+      const fPref = _getVal('nt-folder-pref') || 'S';
+      const fDig  = _getVal('nt-folder-dig')  || '2';
+      const spec  = _getVal('nt-special') || 'S0';
+      const s1 = _pad(1, digS); const e1 = _pad(1, digE);
+      const s0 = _pad(0, digS); const e161 = _pad(161, digE);
+      const num  = `${prefS}${s1}${sepSE}${prefE}${e1}`;
+      const num0 = `${prefS}${s0}${sepSE}${prefE}${e161}`;
+      _set('newcat-prev-normal',  `Scorpion${sep1}${num}${sep2}Pilot.mkv`);
+      _set('newcat-prev-special', `${spec}/Scorpion${sep1}${num0}${sep2}Le pouvoir du docteur.mkv`);
+    } else {
+      const sep   = _getVal('nt-sep-year')  || ' ';
+      const fmt   = _getVal('nt-fmt-year')  || 'paren';
+      const bonus = _getVal('nt-bonus')     || 'Bonus';
+      const year  = fmt === 'paren' ? '(2010)' : fmt === 'plain' ? '2010' : '';
+      _set('newcat-prev-normal', year ? `Inception${sep}${year}.mkv` : 'Inception.mkv');
+      _set('newcat-prev-bonus',  `${bonus}/`);
+    }
+  }
+
+  async function newcatSaveTpl() {
+    const payload = _newcatType === 'seasonal' ? {
+      type:           'seasonal',
+      sep1:           _getVal('nt-sep1'),
+      sep2:           _getVal('nt-sep2'),
+      prefix_season:  _getVal('nt-pref-s'),
+      digits_season:  parseInt(_getVal('nt-dig-s')),
+      sep_se:         _getVal('nt-sep-se'),
+      prefix_episode: _getVal('nt-pref-e'),
+      digits_episode: parseInt(_getVal('nt-dig-e')),
+      folder_prefix:  _getVal('nt-folder-pref'),
+      folder_digits:  parseInt(_getVal('nt-folder-dig')),
+      special_folder: _getVal('nt-special'),
+    } : {
+      type:        'noseasonal',
+      sep_year:    _getVal('nt-sep-year'),
+      year_format: _getVal('nt-fmt-year'),
+      bonus_folder:_getVal('nt-bonus'),
+    };
+
+    try {
+      const r = await fetch(`${API}/api/admin/naming-templates`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail ?? JSON.stringify(d));
+
+      // Recharger les templates et sélectionner le nouveau
+      const r2 = await fetch(`${API}/api/admin/naming-templates`);
+      _newcatTemplates = await r2.json();
+      _newcatRebuildSelect();
+      // Sélectionner le nouveau template
+      document.getElementById('newcat-template').value = d.id;
+      newcatSelTpl();
+      document.getElementById('newcat-tpl-form').style.display = 'none';
+
+    } catch(e) {
+      const errEl = document.getElementById('newcat-error');
+      if (errEl) { errEl.textContent = e.message; errEl.style.display = 'block'; }
+    }
+  }
+
+  async function saveNewCategory() {
+    const name  = (_getVal('newcat-name') || '').trim().toLowerCase();
+    const errEl = document.getElementById('newcat-error');
+    if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+
+    if (!name) {
+      if (errEl) { errEl.textContent = 'Le nom est obligatoire'; errEl.style.display = 'block'; }
+      return;
+    }
+
+    const templateId = parseInt(document.getElementById('newcat-template')?.value) || null;
+
+    try {
+      const r = await fetch(`${API}/api/admin/categories`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          name,
+          has_seasons: _newcatType === 'seasonal',
+          template_id: templateId,
+        }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail ?? JSON.stringify(d));
+
+      if (!_categories.includes(name)) {
+        _categories.push(name);
+        _categories.sort();
+      }
+      _renderCategorySelect();
+      _wizardRefreshCatSelects();
+      closeCategoryModal();
+
+    } catch(e) {
+      if (errEl) { errEl.textContent = e.message; errEl.style.display = 'block'; }
+    }
+  }
+
+  function _set(id, val) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = val;
+  }
+
   /* ── API publique ─────────────────────────────────────────────────────── */
   return {
     init, sync, refresh, confirmDelete,
@@ -932,5 +1144,9 @@ const Mounts = (() => {
     closeMount:     () => _closeOverlay('overlay-mount'),
     closeEditMount: () => _closeOverlay('overlay-edit-mount'),
     closeConfirm:   () => _closeOverlay('overlay-confirm'),
+    // Catégorie modal
+    openCategoryModal, closeCategoryModal,
+    newcatSelectType, newcatSelTpl, newcatToggleForm,
+    newcatUpdPrev, newcatSaveTpl, saveNewCategory,
   };
 })();

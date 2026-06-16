@@ -211,6 +211,7 @@ CREATE TABLE IF NOT EXISTS media_files (
                     CHECK (disk_status IN ('present', 'missing', 'duplicate')),
     first_seen_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     last_seen_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    file_mtime      TIMESTAMP,
     UNIQUE(hash_partial, mount_id)
 );
 
@@ -298,21 +299,12 @@ CREATE INDEX IF NOT EXISTS idx_metadata_file ON video_metadata(file_id);
 
 -- ============================================================
 -- TABLE: rename_proposals
--- Propositions de renommage générées par le système.
+-- Gérée par la migration 002 (structure enrichie).
+-- Ce bloc est intentionnellement vide pour éviter les conflits.
 -- ============================================================
-CREATE TABLE IF NOT EXISTS rename_proposals (
-    id            SERIAL PRIMARY KEY,
-    file_id       INTEGER NOT NULL REFERENCES media_files(id) ON DELETE CASCADE,
-    proposed_name VARCHAR(500) NOT NULL,
-    category      VARCHAR(50),
-    confidence    FLOAT,
-    rule_used     VARCHAR(255),
-    status        VARCHAR(50) DEFAULT 'pending',
-    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    accepted_at   TIMESTAMP
-);
+-- (voir database/migrations/002_catalogue_medias.sql)
 
-CREATE INDEX IF NOT EXISTS idx_proposals_file ON rename_proposals(file_id);
+--CREATE INDEX IF NOT EXISTS idx_proposals_file ON rename_proposals(file_id);
 
 
 -- ============================================================

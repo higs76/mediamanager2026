@@ -37,4 +37,12 @@ VALUES
     ('noseasonal', true, ' ', 'plain', 'Bonus'),
     ('noseasonal', true, ' ', 'none',  'Bonus')
 ON CONFLICT DO NOTHING;
+
+INSERT INTO config (key, value, description) VALUES
+    ('catalog_tech_tags',
+     '4K;2160p;1080p;1080i;720p;576p;480p;BluRay;BDRip;BRRip;WEB-DL;WEBRip;HDLight;x264;x265;H264;H265;HEVC;AVC;AV1;XVID;DIVX;AC3;DTS;AAC;TrueHD;EAC3;FLAC;MP3;MULTi;VFF;VF;VO;VOST;VOSTFR;FRENCH;ENGLISH;HDR;HDR10;DV;DoVi;10bit;10Bits;8bit;PROPER;REPACK;RETAIL;REMUX;Web;Final;FINAL;FiNAL;MULTI;TRUEFRENCH;SUBFRENCH',
+     'Tags techniques à supprimer lors de l''analyse des noms (séparés par ;)'),
+    ('catalog_interval_hours', '24',
+     'Intervalle en heures entre deux passages du catalogueur')
+ON CONFLICT (key) DO NOTHING;
  

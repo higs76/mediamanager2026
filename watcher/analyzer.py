@@ -546,10 +546,21 @@ class AnalyzeQueue:
                 process_session(session_id)
                 time.sleep(0.5)  # Petite pause entre sessions
 
+            # Déclencher le catalogueur quand l'analyse est terminée
+            if not self._running:
+                break
+            try:
+                from watcher.cataloger import run_cataloger
+                run_cataloger()
+            except Exception as e:
+                logger.error(f"Catalogueur: {e}")
+
             # Attendre le prochain trigger (scan terminé, etc.)
             # ou timeout de 30 min pour re-vérifier
             self._event.wait(timeout=1800)
             self._event.clear()
+
+        
 
     def _next_pending_session(self) -> int | None:
         """Retourne l'ID de la prochaine session pending, ou None."""
