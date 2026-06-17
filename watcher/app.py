@@ -216,16 +216,53 @@ async def lifespan(app: FastAPI):
     ensure_timezone()
     ensure_system_dependencies()
     init_database_tables()
-    # Démarrer la file de scans en arrière-plan
+
+    # ── Nettoyage des jobs interrompus ────────────────────────────────────
+    try:
+        with engine.connect() as conn:
+            r1 = conn.execute(text("""
+                UPDATE scan_jobs
+                SET status = 'error',
+                    error_message = 'Interrompu par redémarrage',
+                    finished_at = NOW()
+                WHERE status = 'running'
+            """))
+            r2 = conn.execute(text("""
+                UPDATE analyze_sessions
+                SET status = 'pending',
+                    started_at = NULL,
+                    files_done = 0
+                WHERE status = 'running'
+            """))
+            r3 = conn.execute(text("""
+                UPDATE media_files
+                SET status = 'discovered'
+                WHERE status = 'analyzing'
+            """))
+            conn.commit()
+            if r1.rowcount: logger.info(f"↺ {r1.rowcount} scan(s) interrompu(s) marqués en erreur")
+            if r2.rowcount: logger.info(f"↺ {r2.rowcount} session(s) d'analyse remises en pending")
+            if r3.rowcount: logger.info(f"↺ {r3.rowcount} fichier(s) remis en discovered")
+    except Exception as e:
+        logger.warning(f"Nettoyage jobs interrompus : {e}")
+
+    # ── Démarrer les queues ───────────────────────────────────────────────
     from watcher.scanner import scan_queue
     scan_queue.start()
     from watcher.analyzer import analyze_queue
     analyze_queue.start()
-    # Scanner tous les montages actifs au démarrage
     scan_queue.enqueue_all_active()
+
     yield
-    # Arrêt propre (rien à faire pour l'instant)
+
+    # ── Arrêt propre ──────────────────────────────────────────────────────
     logger.info("Arrêt du service MediaManager Watcher")
+    try:
+        scan_queue.stop()
+        analyze_queue.stop()
+        logger.info("✓ Queues arrêtées proprement")
+    except Exception as e:
+        logger.warning(f"Arrêt queues : {e}")
 
 
 # ==========================================

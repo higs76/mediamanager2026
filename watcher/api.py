@@ -1858,3 +1858,222 @@ def library_title_detail(title_id: int):
     except Exception as e:
         logger.error(f"library_title_detail: {e}")
         raise HTTPException(500, str(e))
+    
+    # ── Renommage utilisateur ─────────────────────────────────────────────────────
+
+@router.get("/library/proposals")
+def library_proposals(category_id: int = None):
+    try:
+        with engine.connect() as conn:
+            params = {}
+            cat_filter = ""
+            if category_id:
+                cat_filter = "AND c.id = :cat_id"
+                params["cat_id"] = category_id
+
+            rows = conn.execute(text(f"""
+                SELECT
+                    mt.id,
+                    mt.display_name,
+                    mt.folder_name,
+                    mt.folder_status,
+                    c.name,
+                    c.has_seasons,
+                    COUNT(rp.id) as proposal_count
+                FROM media_titles mt
+                JOIN mounts m ON m.id = mt.mount_id
+                JOIN categories c ON c.id = m.category_id
+                LEFT JOIN media_items mi ON mi.title_id = mt.id
+                LEFT JOIN rename_proposals rp ON (
+                    rp.title_id = mt.id
+                    OR rp.item_id = mi.id
+                )
+                WHERE rp.status = 'pending'
+                {cat_filter}
+                GROUP BY mt.id, mt.display_name, mt.folder_name,
+                         mt.folder_status, c.name, c.has_seasons
+                ORDER BY c.name, mt.display_name
+            """), params).fetchall()
+
+        return JSONResponse([{
+            "title_id":       r[0],
+            "display_name":   r[1] or r[2],
+            "folder_name":    r[2],
+            "folder_status":  r[3],
+            "category":       r[4],
+            "has_seasons":    r[5],
+            "proposal_count": r[6],
+        } for r in rows])
+    except Exception as e:
+        logger.error(f"library_proposals: {e}")
+        raise HTTPException(500, str(e))
+
+
+@router.get("/library/proposals/{title_id}")
+def library_proposals_detail(title_id: int):
+    """
+    Détail des propositions pour un titre — dossier + fichiers par saison.
+    """
+    try:
+        with engine.connect() as conn:
+            # Info du titre
+            title = conn.execute(text("""
+                SELECT mt.id, mt.display_name, mt.folder_name,
+                       mt.folder_status, c.name, c.has_seasons,
+                       nt.sep1, nt.sep2, nt.prefix_season, nt.digits_season,
+                       nt.sep_se, nt.prefix_episode, nt.digits_episode,
+                       nt.sep_year, nt.year_format, mt.year
+                FROM media_titles mt
+                JOIN mounts m ON m.id = mt.mount_id
+                JOIN categories c ON c.id = m.category_id
+                LEFT JOIN naming_templates nt ON nt.id = c.template_id
+                WHERE mt.id = :tid
+            """), {"tid": title_id}).fetchone()
+
+            if not title:
+                raise HTTPException(404, "Titre introuvable")
+
+            # Proposition sur le dossier titre
+            title_prop = conn.execute(text("""
+                SELECT id, current_name, proposed_name, status
+                FROM rename_proposals
+                WHERE title_id = :tid AND item_id IS NULL
+                ORDER BY created_at DESC LIMIT 1
+            """), {"tid": title_id}).fetchone()
+
+            # Propositions sur les fichiers
+            item_props = conn.execute(text("""
+                SELECT rp.id, rp.current_name, rp.proposed_name, rp.status,
+                       mi.season, mi.episode, mi.episode_title, mi.id as item_id,
+                       mf.filename, mf.size_bytes,
+                       vm.video_codec, vm.video_height, vm.hdr_format
+                FROM media_items mi
+                JOIN rename_proposals rp ON rp.item_id = mi.id
+                    AND rp.status = 'pending'
+                JOIN media_files mf ON mf.id = mi.file_id
+                LEFT JOIN video_metadata vm ON vm.file_id = mf.id
+                WHERE mi.title_id = :tid
+                ORDER BY mi.season NULLS LAST, mi.episode NULLS LAST
+            """), {"tid": title_id}).fetchall()
+
+        # Grouper par saison
+        seasons = {}
+        for r in item_props:
+            s = r[4]
+            if s not in seasons:
+                seasons[s] = []
+            seasons[s].append({
+                "prop_id":       r[0],
+                "current_name":  r[1],
+                "proposed_name": r[2],
+                "status":        r[3],
+                "season":        r[4],
+                "episode":       r[5],
+                "episode_title": r[6],
+                "item_id":       r[7],
+                "filename":      r[8],
+                "size_bytes":    r[9],
+                "codec":         r[10],
+                "height":        r[11],
+                "hdr":           r[12],
+            })
+
+        tpl = {
+            "sep1":           title[6],
+            "sep2":           title[7],
+            "prefix_season":  title[8],
+            "digits_season":  title[9],
+            "sep_se":         title[10],
+            "prefix_episode": title[11],
+            "digits_episode": title[12],
+            "sep_year":       title[13],
+            "year_format":    title[14],
+        }
+
+        return JSONResponse({
+            "title_id":      title[0],
+            "display_name":  title[1] or title[2],
+            "folder_name":   title[2],
+            "folder_status": title[3],
+            "category":      title[4],
+            "has_seasons":   title[5],
+            "year":          title[15],
+            "template":      tpl,
+            "title_proposal": {
+                "prop_id":       title_prop[0],
+                "current_name":  title_prop[1],
+                "proposed_name": title_prop[2],
+                "status":        title_prop[3],
+            } if title_prop else None,
+            "seasons": {
+                str(k): v for k, v in sorted(
+                    seasons.items(),
+                    key=lambda x: (x[0] is None, x[0])
+                )
+            },
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"library_proposals_detail: {e}")
+        raise HTTPException(500, str(e))
+
+
+@router.post("/library/proposals/{prop_id}/accept")
+def accept_proposal(prop_id: int, data: dict = Body(...)):
+    """
+    Accepte une proposition avec le nom final choisi par l'utilisateur.
+    update_mkv : bool — mettre à jour le tag title dans le fichier MKV
+    """
+    final_name  = (data.get("final_name") or "").strip()
+    update_mkv  = data.get("update_mkv", False)
+
+    if not final_name:
+        raise HTTPException(400, "final_name obligatoire")
+    try:
+        with engine.connect() as conn:
+            rp = conn.execute(text(
+                "SELECT id, status FROM rename_proposals WHERE id = :id"
+            ), {"id": prop_id}).fetchone()
+            if not rp:
+                raise HTTPException(404, "Proposition introuvable")
+            if rp[1] != 'pending':
+                raise HTTPException(400, f"Proposition déjà traitée : {rp[1]}")
+
+            conn.execute(text("""
+                UPDATE rename_proposals
+                SET status = 'accepted',
+                    custom_name = :name,
+                    resolved_at = NOW()
+                WHERE id = :id
+            """), {"name": final_name, "id": prop_id})
+            conn.commit()
+
+        return JSONResponse({
+            "success":    True,
+            "prop_id":    prop_id,
+            "final_name": final_name,
+            "update_mkv": update_mkv,
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"accept_proposal: {e}")
+        raise HTTPException(500, str(e))
+
+
+@router.post("/library/proposals/{prop_id}/reject")
+def reject_proposal(prop_id: int):
+    """Rejette une proposition — ne sera plus reproposée."""
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("""
+                UPDATE rename_proposals
+                SET status = 'rejected', resolved_at = NOW()
+                WHERE id = :id AND status = 'pending'
+            """), {"id": prop_id})
+            conn.commit()
+        return JSONResponse({"success": True, "prop_id": prop_id})
+    except Exception as e:
+        logger.error(f"reject_proposal: {e}")
+        raise HTTPException(500, str(e))

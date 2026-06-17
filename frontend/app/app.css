@@ -295,3 +295,29 @@ input:focus, select:focus {
   animation: spin .6s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* ══ Blocs renommage responsive ══════════════════════════════════════════ */
+.rename-blocs-row {
+  display:flex;
+  align-items:flex-end;
+  gap:6px;
+  flex-wrap:wrap;
+  margin-bottom:8px;
+}
+.rename-bloc-sep {
+  font-family:'JetBrains Mono','Fira Code',monospace;
+  font-size:13px;
+  color:var(--muted);
+  padding-bottom:6px;
+  flex-shrink:0;
+}
+
+/* Masquer les flèches natives des inputs number */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+}
