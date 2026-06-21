@@ -113,3 +113,7 @@ CREATE TABLE IF NOT EXISTS rename_proposals (
 CREATE INDEX IF NOT EXISTS idx_proposals_title  ON rename_proposals(title_id);
 CREATE INDEX IF NOT EXISTS idx_proposals_item   ON rename_proposals(item_id);
 CREATE INDEX IF NOT EXISTS idx_proposals_status ON rename_proposals(status);
+
+-- Ajout du statut "vu" sur les fichiers
+ALTER TABLE media_items ADD COLUMN IF NOT EXISTS watched BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE media_items ADD COLUMN IF NOT EXISTS watched_at TIMESTAMP;

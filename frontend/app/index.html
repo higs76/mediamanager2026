@@ -18,10 +18,10 @@
       <span>MediaManager</span>
     </div>
     <div class="nav-links">
-      <button class="nav-item active" data-tab="library" onclick="switchTab('library')">
+      <button class="nav-item active" data-tab="library" onclick="goLibraryHome()">
         <i class="bi bi-grid"></i> Bibliothèque
       </button>
-      <button class="nav-item" data-tab="rename" onclick="switchTab('rename')">
+      <button class="nav-item" data-tab="rename" onclick="goRename()">
         <i class="bi bi-pencil-square"></i> Renommage
         <span id="rename-badge" class="badge-count" style="display:none">0</span>
       </button>
@@ -71,6 +71,25 @@ function switchTab(name) {
   if (name === 'library') Library.init();
   if (name === 'rename')  Rename.init();
 }
+
+
+function goLibraryHome() {
+  if (activeTab !== 'library') {
+    switchTab('library');
+  } else {
+    Library.init();
+  }
+}
+
+function goRename() {
+  if (activeTab !== 'rename') {
+    switchTab('rename');
+  } else {
+    Rename.init();
+  }
+}
+
+
 
 function esc(s) {
   return String(s ?? '')

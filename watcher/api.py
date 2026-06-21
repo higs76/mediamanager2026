@@ -1743,7 +1743,7 @@ def library_categories_stats():
 
 @router.get("/library/titles")
 def library_titles(category_id: int, search: str = None):
-    """Titres d'une catégorie avec infos de base."""
+    """Titres d'une catégorie avec stats résolutions/codecs/poids/vu."""
     try:
         with engine.connect() as conn:
             params = {"cat": category_id}
@@ -1751,45 +1751,115 @@ def library_titles(category_id: int, search: str = None):
             if search:
                 search_clause = "AND mt.display_name ILIKE :search"
                 params["search"] = f"%{search}%"
-            rows = conn.execute(text(f"""
-                    SELECT mt.id, mt.folder_name, mt.display_name,
-                        mt.year, mt.folder_status,
-                        COUNT(DISTINCT mi.id)                              as file_count,
-                        COUNT(DISTINCT mi.season)                          as season_count,
-                        COUNT(DISTINCT rp.id)
-                            FILTER (WHERE rp.status='pending')             as proposals
-                    FROM media_titles mt
-                    LEFT JOIN media_items mi ON mi.title_id = mt.id
-                    LEFT JOIN rename_proposals rp ON (
-                        rp.title_id = mt.id
-                        OR rp.item_id = mi.id
-                    )
-                    JOIN mounts m ON m.id = mt.mount_id
-                    WHERE m.category_id = :cat {search_clause}
-                    GROUP BY mt.id, mt.folder_name, mt.display_name,
-                            mt.year, mt.folder_status
-                    ORDER BY mt.display_name
-                """), params).fetchall()
 
-        return JSONResponse([{
-            "id":           r[0],
-            "folder_name":  r[1],
-            "display_name": r[2] or r[1],
-            "year":         r[3],
-            "folder_status":r[4],
-            "file_count":   r[5],
-            "season_count": r[6],
-            "proposals":    r[7],
-        } for r in rows])
+            # ── Requête principale : titres + compteurs de base ───────────
+            rows = conn.execute(text(f"""
+                SELECT mt.id, mt.folder_name, mt.display_name,
+                       mt.year, mt.folder_status,
+                       COUNT(DISTINCT mi.id)                    as file_count,
+                       COUNT(DISTINCT mi.season)                as season_count,
+                       COUNT(DISTINCT rp.id)
+                           FILTER (WHERE rp.status='pending')   as proposals,
+                       COUNT(DISTINCT mi.id)
+                           FILTER (WHERE mi.watched = true)     as watched_count,
+                       ROUND(SUM(mf.size_bytes)/1073741824::numeric, 2) as size_gb
+                FROM media_titles mt
+                LEFT JOIN media_items mi ON mi.title_id = mt.id
+                LEFT JOIN media_files  mf ON mf.id = mi.file_id
+                LEFT JOIN rename_proposals rp ON (
+                    rp.title_id = mt.id
+                    OR rp.item_id = mi.id
+                )
+                JOIN mounts m ON m.id = mt.mount_id
+                WHERE m.category_id = :cat {search_clause}
+                GROUP BY mt.id, mt.folder_name, mt.display_name,
+                         mt.year, mt.folder_status
+                ORDER BY mt.display_name
+            """), params).fetchall()
+
+            title_ids = [r[0] for r in rows]
+            if not title_ids:
+                return JSONResponse([])
+
+            # ── Résolutions groupées pour TOUS les titres en une requête ──
+            res_rows = conn.execute(text("""
+                SELECT mi.title_id,
+                    CASE
+                        WHEN vm.video_height >= 2160 THEN '4K'
+                        WHEN vm.video_height >= 1080 THEN '1080p'
+                        WHEN vm.video_height >= 720  THEN '720p'
+                        ELSE 'SD'
+                    END as label,
+                    COUNT(*) as cnt
+                FROM media_items mi
+                JOIN media_files mf ON mf.id = mi.file_id
+                JOIN video_metadata vm ON vm.file_id = mf.id
+                JOIN mounts m ON m.id = mf.mount_id
+                WHERE m.category_id = :cat AND vm.video_height IS NOT NULL
+                GROUP BY mi.title_id, label
+            """), {"cat": category_id}).fetchall()
+
+            res_by_title = {}
+            for tid, label, cnt in res_rows:
+                res_by_title.setdefault(tid, []).append((label, cnt))
+
+            # ── Codecs groupés pour TOUS les titres en une requête ────────
+            cod_rows = conn.execute(text("""
+                SELECT mi.title_id, vm.video_codec, COUNT(*) as cnt
+                FROM media_items mi
+                JOIN media_files mf ON mf.id = mi.file_id
+                JOIN video_metadata vm ON vm.file_id = mf.id
+                JOIN mounts m ON m.id = mf.mount_id
+                WHERE m.category_id = :cat AND vm.video_codec IS NOT NULL
+                GROUP BY mi.title_id, vm.video_codec
+            """), {"cat": category_id}).fetchall()
+
+            cod_by_title = {}
+            for tid, codec, cnt in cod_rows:
+                cod_by_title.setdefault(tid, []).append((codec, cnt))
+
+        # ── Assemblage en Python (rapide, en mémoire) ──────────────────────
+        titles_out = []
+        for r in rows:
+            title_id      = r[0]
+            file_count    = r[5] or 0
+            watched_count = r[8] or 0
+            watched_pct   = round(watched_count / file_count * 100) if file_count else 0
+
+            res_list = sorted(res_by_title.get(title_id, []), key=lambda x: -x[1])[:4]
+            total_res = sum(x[1] for x in res_list) or 1
+            resolutions = [{"label": l, "pct": round(c/total_res*100)} for l, c in res_list]
+
+            cod_list = sorted(cod_by_title.get(title_id, []), key=lambda x: -x[1])[:4]
+            total_cod = sum(x[1] for x in cod_list) or 1
+            codecs = [{"label": l.upper(), "pct": round(c/total_cod*100)} for l, c in cod_list]
+
+            titles_out.append({
+                "id":            r[0],
+                "folder_name":   r[1],
+                "display_name":  r[2] or r[1],
+                "year":          r[3],
+                "folder_status": r[4],
+                "file_count":    file_count,
+                "season_count":  r[6],
+                "proposals":     r[7] or 0,
+                "watched_count": watched_count,
+                "watched_pct":   watched_pct,
+                "size_gb":       float(r[9] or 0),
+                "resolutions":   resolutions,
+                "codecs":        codecs,
+            })
+
+        return JSONResponse(titles_out)
     except Exception as e:
         logger.error(f"library_titles: {e}")
         raise HTTPException(500, str(e))
-
+    
 @router.get("/library/titles/{title_id}")
 def library_title_detail(title_id: int):
-    """Détail d'un titre — saisons et épisodes."""
+    """Détail d'un titre — saisons et épisodes avec stats."""
     try:
-        with engine.connect() as conn:            
+        with engine.connect() as conn:
             title = conn.execute(text("""
                 SELECT mt.id, mt.folder_name, mt.display_name,
                        mt.year, mt.folder_status, c.name, c.has_seasons
@@ -1804,7 +1874,8 @@ def library_title_detail(title_id: int):
 
             items = conn.execute(text("""
                 SELECT mi.id, mi.season, mi.episode, mi.episode_title,
-                       mi.file_status, mf.filename, mf.size_bytes,
+                       mi.file_status, mi.watched,
+                       mf.filename, mf.size_bytes,
                        vm.video_codec, vm.video_height, vm.hdr_format,
                        vm.duration_seconds,
                        rp.proposed_name, rp.status as prop_status, rp.id as prop_id
@@ -1817,28 +1888,65 @@ def library_title_detail(title_id: int):
                 ORDER BY mi.season NULLS LAST, mi.episode NULLS LAST
             """), {"tid": title_id}).fetchall()
 
-        # Grouper par saison
+        # Grouper par saison + calculer stats par saison
         seasons = {}
         for r in items:
             s = r[1]
             if s not in seasons:
-                seasons[s] = []
-            seasons[s].append({
+                seasons[s] = {"items": [], "res": {}, "cod": {},
+                              "size": 0, "watched": 0}
+            entry = {
                 "item_id":       r[0],
                 "season":        r[1],
                 "episode":       r[2],
                 "episode_title": r[3],
                 "file_status":   r[4],
-                "filename":      r[5],
-                "size_bytes":    r[6],
-                "codec":         r[7],
-                "height":        r[8],
-                "hdr":           r[9],
-                "duration":      r[10],
-                "proposed_name": r[11],
-                "prop_status":   r[12],
-                "prop_id":       r[13],
-            })
+                "watched":       r[5],
+                "filename":      r[6],
+                "size_bytes":    r[7],
+                "codec":         r[8],
+                "height":        r[9],
+                "hdr":           r[10],
+                "duration":      r[11],
+                "proposed_name": r[12],
+                "prop_status":   r[13],
+                "prop_id":       r[14],
+            }
+            seasons[s]["items"].append(entry)
+            seasons[s]["size"] += (r[7] or 0)
+            if r[5]:
+                seasons[s]["watched"] += 1
+            if r[9]:
+                label = '4K' if r[9] >= 2160 else '1080p' if r[9] >= 1080 \
+                        else '720p' if r[9] >= 720 else 'SD'
+                seasons[s]["res"][label] = seasons[s]["res"].get(label, 0) + 1
+            if r[8]:
+                seasons[s]["cod"][r[8]] = seasons[s]["cod"].get(r[8], 0) + 1
+
+        def _pct_list(d, limit=4):
+            total = sum(d.values()) or 1
+            top = sorted(d.items(), key=lambda x: -x[1])[:limit]
+            return [{"label": k, "pct": round(v/total*100)} for k, v in top]
+
+        seasons_out = {}
+        all_res, all_cod = {}, {}
+        total_size, total_watched, total_items = 0, 0, 0
+
+        for s, data in sorted(seasons.items(), key=lambda x: (x[0] is None, x[0])):
+            n = len(data["items"])
+            seasons_out[str(s)] = {
+                "items":       data["items"],
+                "file_count":  n,
+                "watched_pct": round(data["watched"]/n*100) if n else 0,
+                "size_gb":     round(data["size"]/1073741824, 2),
+                "resolutions": _pct_list(data["res"]),
+                "codecs":      _pct_list(data["cod"]),
+            }
+            for k, v in data["res"].items(): all_res[k] = all_res.get(k,0)+v
+            for k, v in data["cod"].items(): all_cod[k] = all_cod.get(k,0)+v
+            total_size    += data["size"]
+            total_watched += data["watched"]
+            total_items   += n
 
         return JSONResponse({
             "id":           title[0],
@@ -1848,10 +1956,13 @@ def library_title_detail(title_id: int):
             "folder_status":title[4],
             "category":     title[5],
             "has_seasons":  title[6],
-            "seasons":      {str(k): v for k, v in sorted(
-                seasons.items(),
-                key=lambda x: (x[0] is None, x[0])
-            )},
+            "file_count":   total_items,
+            "proposals_total": sum(1 for it in items if it[14]),
+            "watched_pct":  round(total_watched/total_items*100) if total_items else 0,
+            "size_gb":      round(total_size/1073741824, 2),
+            "resolutions":  _pct_list(all_res),
+            "codecs":       _pct_list(all_cod),
+            "seasons":      seasons_out,
         })
     except HTTPException:
         raise
@@ -2076,4 +2187,140 @@ def reject_proposal(prop_id: int):
         return JSONResponse({"success": True, "prop_id": prop_id})
     except Exception as e:
         logger.error(f"reject_proposal: {e}")
+        raise HTTPException(500, str(e))
+    
+@router.get("/library/items/{item_id}")
+def library_item_detail(item_id: int):
+    """Fiche détail complète d'un fichier média."""
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(text("""
+                SELECT
+                    mi.id            AS item_id,
+                    mi.season        AS season,
+                    mi.episode       AS episode,
+                    mi.episode_title AS episode_title,
+                    mi.watched       AS watched,
+                    mi.watched_at    AS watched_at,
+                    mi.file_status   AS file_status,
+                    mt.id            AS title_id,
+                    mt.display_name  AS title_name,
+                    mt.folder_name   AS folder_name,
+                    c.name           AS category,
+                    c.has_seasons    AS has_seasons,
+                    mf.id            AS file_id,
+                    mf.filename      AS filename,
+                    mf.path_relative AS path_relative,
+                    mf.size_bytes    AS size_bytes,
+                    mf.extension     AS extension,
+                    mf.disk_status   AS disk_status,
+                    vm.duration_seconds AS duration_seconds,
+                    vm.video_codec      AS video_codec,
+                    vm.video_bitrate    AS video_bitrate,
+                    vm.video_width      AS video_width,
+                    vm.video_height     AS video_height,
+                    vm.video_fps        AS video_fps,
+                    vm.audio_codecs           AS audio_codecs,
+                    vm.audio_languages        AS audio_languages,
+                    vm.audio_channels         AS audio_channels,
+                    vm.audio_channel_layouts  AS audio_channel_layouts,
+                    vm.subtitle_languages     AS subtitle_languages,
+                    vm.subtitle_count         AS subtitle_count,
+                    vm.container_format       AS container_format,
+                    vm.hdr_format             AS hdr_format,
+                    vm.color_space            AS color_space,
+                    rp.id            AS prop_id,
+                    rp.proposed_name AS proposed_name,
+                    rp.status        AS prop_status
+                FROM media_items mi
+                JOIN media_titles mt ON mt.id = mi.title_id
+                JOIN mounts m ON m.id = mt.mount_id
+                JOIN categories c ON c.id = m.category_id
+                JOIN media_files mf ON mf.id = mi.file_id
+                LEFT JOIN video_metadata vm ON vm.file_id = mf.id
+                LEFT JOIN rename_proposals rp ON rp.item_id = mi.id
+                    AND rp.status = 'pending'
+                WHERE mi.id = :id
+            """), {"id": item_id}).mappings().fetchone()
+
+            if not row:
+                raise HTTPException(404, "Fichier introuvable")
+
+        def split_semi(val):
+            return [x for x in (val or "").split(";") if x]
+
+        return JSONResponse({
+            "item_id":       row["item_id"],
+            "season":        row["season"],
+            "episode":       row["episode"],
+            "episode_title": row["episode_title"],
+            "watched":       row["watched"],
+            "watched_at":    str(row["watched_at"]) if row["watched_at"] else None,
+            "file_status":   row["file_status"],
+            "title_id":      row["title_id"],
+            "title_name":    row["title_name"],
+            "folder_name":   row["folder_name"],
+            "category":      row["category"],
+            "has_seasons":   row["has_seasons"],
+            "file_id":       row["file_id"],
+            "filename":      row["filename"],
+            "path_relative": row["path_relative"],
+            "size_bytes":    row["size_bytes"],
+            "extension":     row["extension"],
+            "disk_status":   row["disk_status"],
+            "video": {
+                "duration_seconds": row["duration_seconds"],
+                "codec":            row["video_codec"],
+                "bitrate":          row["video_bitrate"],
+                "width":            row["video_width"],
+                "height":           row["video_height"],
+                "fps":              row["video_fps"],
+                "container":        row["container_format"],
+                "hdr_format":       row["hdr_format"],
+                "color_space":      row["color_space"],
+            },
+            "audio": {
+                "codecs":    split_semi(row["audio_codecs"]),
+                "languages": split_semi(row["audio_languages"]),
+                "channels":  split_semi(row["audio_channels"]),
+                "layouts":   split_semi(row["audio_channel_layouts"]),
+            },
+            "subtitles": {
+                "languages": split_semi(row["subtitle_languages"]),
+                "count":     row["subtitle_count"] or 0,
+            },
+            "proposal": {
+                "prop_id":       row["prop_id"],
+                "proposed_name": row["proposed_name"],
+                "status":        row["prop_status"],
+            } if row["prop_id"] else None,
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"library_item_detail: {e}")
+        raise HTTPException(500, str(e))
+
+
+@router.post("/library/items/{item_id}/watched")
+def toggle_watched(item_id: int, data: dict = Body(...)):
+    """Bascule le statut vu/non vu d'un fichier."""
+    watched = data.get("watched", True)
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("""
+                UPDATE media_items
+                SET watched = :w,
+                    watched_at = CASE WHEN :w THEN NOW() ELSE NULL END
+                WHERE id = :id
+                RETURNING id
+            """), {"w": watched, "id": item_id}).fetchone()
+            conn.commit()
+        if not result:
+            raise HTTPException(404, "Fichier introuvable")
+        return JSONResponse({"success": True, "item_id": item_id, "watched": watched})
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"toggle_watched: {e}")
         raise HTTPException(500, str(e))
