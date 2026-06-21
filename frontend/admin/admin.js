@@ -24,6 +24,7 @@ function switchTab(name) {
   else if (name === 'stats') Stats.load();
   else if (name === 'logs')  startLogs();
   else if (name === 'config') Config.load();
+  else if (name === 'perf')  Perf.load();
 }
 
 /* ── Thème ────────────────────────────────────────────────────────────────── */
@@ -76,9 +77,9 @@ function renderDashCards(d) {
     <div class="card">
       <div class="card-header"><i class="bi bi-pc-display-horizontal"></i> Système hôte</div>
       <div class="card-row"><span class="card-label">Démarré le</span>
-        <span class="card-value" style="font-size:.82rem">${d.system?.start_time ?? '—'}</span></div>
+        <span class="card-value text-sm">${d.system?.start_time ?? '—'}</span></div>
       <div class="card-row"><span class="card-label">IP</span>
-        <span class="card-value" style="color:var(--blue)">${d.system?.ip ?? '—'}</span></div>
+        <span class="card-value text-blue">${d.system?.ip ?? '—'}</span></div>
       <div class="card-row"><span class="card-label">Host</span>
         <span class="card-value">${d.system?.host ?? '—'}</span></div>
     </div>
@@ -114,7 +115,7 @@ function renderDashCards(d) {
       <div class="card-row"><span class="card-label">Type</span>
         <span class="card-value">${db.type ?? 'PostgreSQL'}</span></div>
       <div class="card-row"><span class="card-label">Base</span>
-        <span class="card-value" style="color:var(--blue)">${db.database ?? '—'}</span></div>
+        <span class="card-value text-blue">${db.database ?? '—'}</span></div>
     </div>
   `;
 }
@@ -166,10 +167,10 @@ async function updateDashStats(d) {
     const catEl = document.getElementById('stat-categories-list');
     if (catEl) {
       if (catsWithFiles.length === 0) {
-        catEl.innerHTML = '<span style="color:var(--muted)">—</span>';
+        catEl.innerHTML = '<span class="text-muted">—</span>';
       } else {
         catEl.innerHTML = catsWithFiles
-          .map(c => `<span style="color:var(--purple);font-weight:600">
+          .map(c => `<span class="text-purple">
             ${esc(c.name.charAt(0).toUpperCase() + c.name.slice(1))} (${c.count})
           </span>`)
           .join('<span class="slash"> / </span>');
@@ -215,7 +216,7 @@ async function updateDashStats(d) {
     // Scanner
     const sc = j.scanner ?? {};
     if (sc.last_status === 'running') {
-      lines.push(`<span style="color:var(--blue)">⟳ Scanner actif</span>`);
+      lines.push(`<span class="text-blue">⟳ Scanner actif</span>`);
     } else if (sc.last_finished) {
       lines.push(`✓ Scanner — ${sc.files_new ?? 0} nouveaux`);
     }
@@ -225,7 +226,7 @@ async function updateDashStats(d) {
     if (an.running) {
       const pct = an.current_total > 0
         ? Math.round(an.current_done / an.current_total * 100) : 0;
-      lines.push(`<span style="color:var(--blue)">⟳ Analyser ${pct}% — ${an.current_folder?.split('/').pop() ?? ''}</span>`);
+      lines.push(`<span class="text-blue">⟳ Analyser ${pct}% — ${an.current_folder?.split('/').pop() ?? ''}</span>`);
     } else if (an.sessions_pending > 0) {
       lines.push(`⏳ Analyser — ${an.sessions_pending} session(s) en attente`);
     } else {
@@ -247,7 +248,8 @@ async function updateDashStats(d) {
     const hasActive = (j.analyzer?.running || j.cataloger?.titles_pending > 0);
     if (ind) {
       ind.textContent = hasActive ? '● actif' : '● ok';
-      ind.style.color = hasActive ? 'var(--blue)' : 'var(--green)';
+      ind.classList.remove('text-blue', 'text-success');
+      ind.classList.add(hasActive ? 'text-blue' : 'text-success');
     }
 
   } catch(e) {
@@ -271,7 +273,7 @@ async function svcAction(svc, action) {
 function showDashMsg(type, msg) {
   const el = document.getElementById('dash-msg');
   const cls = type === 'ok' ? 'badge-success' : 'badge-danger';
-  el.innerHTML = `<span class="badge ${cls}" style="margin-top:8px">${esc(msg)}</span>`;
+  el.innerHTML = `<span class="badge ${cls} mt-8">${esc(msg)}</span>`;
   setTimeout(() => { el.innerHTML = ''; }, 5000);
 }
 
@@ -309,7 +311,7 @@ async function forceVersionCheck() {
   const badge = document.getElementById('app-version');
   const orig  = badge.textContent;
   badge.textContent = '…';
-  badge.style.opacity = '0.5';
+  badge.classList.add('opacity-50');
   try {
     // 1. Vider le cache serveur
     await fetch(`${API}/api/admin/version/check`);
@@ -323,7 +325,7 @@ async function forceVersionCheck() {
   } catch (_) {
     badge.textContent = orig;
   } finally {
-    badge.style.opacity = '';
+    badge.classList.remove('opacity-50');
   }
 }
 
@@ -341,13 +343,7 @@ function setVersion(current, latest, build, isPrerelease) {
     badge.title = isPrerelease
       ? `Pre-release : ${latest} — version de développement`
       : `Nouvelle version stable : ${latest}`;
-    if (isPrerelease) {
-      badge.style.borderColor = 'var(--yellow)';
-      badge.style.color       = 'var(--yellow)';
-    } else {
-      badge.style.borderColor = '';
-      badge.style.color       = '';
-    }
+    badge.classList.toggle('badge-prerelease', !!isPrerelease);
     badge.classList.add('visible');
   } else {
     badge.classList.remove('visible');
@@ -496,16 +492,16 @@ async function executePurge() {
     const r = await fetch(`${API}/api/admin/purge`, { method: 'DELETE' });
     const d = await r.json();
     if (d.success) {
-      res.innerHTML = '<span style="color:var(--green)"><i class="bi bi-check-circle"></i> ' + esc(d.message) + '</span>';
+      res.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> ' + esc(d.message) + '</span>';
       setTimeout(() => {
         closePurge();
         loadDashboard();
       }, 1500);
     } else {
-      res.innerHTML = '<span style="color:var(--red)">Erreur : ' + esc(JSON.stringify(d)) + '</span>';
+      res.innerHTML = '<span class="text-danger">Erreur : ' + esc(JSON.stringify(d)) + '</span>';
     }
   } catch (e) {
-    res.innerHTML = '<span style="color:var(--red)"><i class="bi bi-x-circle"></i> ' + esc(e.message) + '</span>';
+    res.innerHTML = '<span class="text-danger"><i class="bi bi-x-circle"></i> ' + esc(e.message) + '</span>';
   } finally {
     btn.disabled = false;
     btn.innerHTML = '<i class="bi bi-trash3"></i> Confirmer la purge';

@@ -19,7 +19,7 @@ from pathlib import Path
 
 from sqlalchemy import text
 from watcher.database import engine
-from watcher.scanner import get_config
+from watcher.config_db import get_config
 
 logger = logging.getLogger(__name__)
 
@@ -106,12 +106,19 @@ def parse_ffprobe(data: dict) -> dict:
         height      = video.get("height")
         color_space = video.get("color_space")
 
-        # Bitrate vidéo
+        # Bitrate vidéo — stream, puis tag BPS (Matroska/x265), pas de fallback container
         if video.get("bit_rate"):
             try:
                 video_bitrate = int(video["bit_rate"])
             except (ValueError, TypeError):
                 pass
+        if video_bitrate is None:
+            bps = video.get("tags", {}).get("BPS") or video.get("tags", {}).get("BPS-eng")
+            if bps:
+                try:
+                    video_bitrate = int(bps)
+                except (ValueError, TypeError):
+                    pass
 
         # FPS — ffprobe retourne "24000/1001" ou "25/1"
         r_frame = video.get("r_frame_rate", "")
@@ -154,6 +161,8 @@ def parse_ffprobe(data: dict) -> dict:
     audio_streams = [s for s in streams if s.get("codec_type") == "audio"]
 
     audio_codecs   = []
+    audio_bitrates = []
+    audio_profiles = []
     audio_langs    = []
     audio_channels = []
     audio_layouts  = []
@@ -162,6 +171,26 @@ def parse_ffprobe(data: dict) -> dict:
         codec = a.get("codec_name", "")
         if codec:
             audio_codecs.append(codec)
+
+        # Profil (DTS-HD MA, TrueHD Atmos, Dolby Digital+, etc.)
+        profile = a.get("profile", "")
+        audio_profiles.append(profile)
+
+        # Bitrate audio par piste — stream puis tag BPS (Matroska)
+        br = None
+        if a.get("bit_rate"):
+            try:
+                br = int(a["bit_rate"])
+            except (ValueError, TypeError):
+                pass
+        if br is None:
+            bps = a.get("tags", {}).get("BPS") or a.get("tags", {}).get("BPS-eng")
+            if bps:
+                try:
+                    br = int(bps)
+                except (ValueError, TypeError):
+                    pass
+        audio_bitrates.append(str(br) if br is not None else "")
 
         lang = a.get("tags", {}).get("language", "")
         if lang:
@@ -203,10 +232,12 @@ def parse_ffprobe(data: dict) -> dict:
         "video_width":           width,
         "video_height":          height,
         "video_fps":             fps,
-        "audio_codecs":          ";".join(audio_codecs)  or None,
-        "audio_languages":       ";".join(audio_langs)   or None,
+        "audio_codecs":          ";".join(audio_codecs)    or None,
+        "audio_bitrates":        ";".join(audio_bitrates) or None,
+        "audio_profiles":        ";".join(audio_profiles) or None,
+        "audio_languages":       ";".join(audio_langs)    or None,
         "audio_channels":        ";".join(audio_channels) or None,
-        "audio_channel_layouts": ";".join(audio_layouts) or None,
+        "audio_channel_layouts": ";".join(audio_layouts)  or None,
         "subtitle_languages":    ";".join(sub_langs)     or None,
         "subtitle_count":        len(sub_streams),
         "container_format":      container or None,
@@ -249,6 +280,8 @@ def analyze_file(file_id: int, filepath: str) -> bool:
                         video_height          = :video_height,
                         video_fps             = :video_fps,
                         audio_codecs          = :audio_codecs,
+                        audio_bitrates        = :audio_bitrates,
+                        audio_profiles        = :audio_profiles,
                         audio_languages       = :audio_languages,
                         audio_channels        = :audio_channels,
                         audio_channel_layouts = :audio_channel_layouts,
@@ -266,14 +299,16 @@ def analyze_file(file_id: int, filepath: str) -> bool:
                     INSERT INTO video_metadata (
                         file_id, duration_seconds, video_codec,
                         video_bitrate, video_width, video_height, video_fps,
-                        audio_codecs, audio_languages, audio_channels,
+                        audio_codecs, audio_bitrates, audio_profiles,
+                        audio_languages, audio_channels,
                         audio_channel_layouts, subtitle_languages,
                         subtitle_count, container_format, hdr_format,
                         color_space, file_path_snapshot
                     ) VALUES (
                         :file_id, :duration_seconds, :video_codec,
                         :video_bitrate, :video_width, :video_height, :video_fps,
-                        :audio_codecs, :audio_languages, :audio_channels,
+                        :audio_codecs, :audio_bitrates, :audio_profiles,
+                        :audio_languages, :audio_channels,
                         :audio_channel_layouts, :subtitle_languages,
                         :subtitle_count, :container_format, :hdr_format,
                         :color_space, :file_path_snapshot
@@ -550,10 +585,10 @@ class AnalyzeQueue:
             if not self._running:
                 break
             try:
-                from watcher.cataloger import run_cataloger
-                run_cataloger()
+                from watcher.cataloger import catalog_queue
+                catalog_queue.trigger()
             except Exception as e:
-                logger.error(f"Catalogueur: {e}")
+                logger.error(f"CatalogQueue trigger: {e}")
 
             # Attendre le prochain trigger (scan terminé, etc.)
             # ou timeout de 30 min pour re-vérifier

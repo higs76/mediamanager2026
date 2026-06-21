@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="fr">
+<html lang="fr" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -23,19 +23,30 @@
       </button>
       <button class="nav-item" data-tab="rename" onclick="goRename()">
         <i class="bi bi-pencil-square"></i> Renommage
-        <span id="rename-badge" class="badge-count" style="display:none">0</span>
+        <span id="rename-badge" class="badge-count hidden">0</span>
       </button>
     </div>
   </div>
   <div class="nav-right">
-  <span id="service-status" title="État du service" style="font-size:10px;display:flex;align-items:center;gap:4px;color:var(--muted)">
-    <span id="service-dot" style="width:7px;height:7px;border-radius:50%;background:var(--muted);display:inline-block"></span>
-    <span id="service-label">…</span>
-  </span>
-  <a href="/admin" class="nav-item nav-right-item" title="Interface admin">
-    <i class="bi bi-gear"></i>
-  </a>
-</div>
+    <span id="service-status" class="service-status" title="État du service">
+      <span id="service-dot" class="service-dot"></span>
+      <span id="service-label">…</span>
+    </span>
+    <div class="theme-selector">
+      <button class="theme-btn" id="theme-btn-light" onclick="setTheme('light')" title="Thème clair">
+        <i class="bi bi-sun"></i>
+      </button>
+      <button class="theme-btn active" id="theme-btn-dark" onclick="setTheme('dark')" title="Thème sombre">
+        <i class="bi bi-moon-stars"></i>
+      </button>
+      <button class="theme-btn" id="theme-btn-auto" onclick="setTheme('auto')" title="Thème auto">
+        <i class="bi bi-circle-half"></i>
+      </button>
+    </div>
+    <a href="/admin" class="nav-item nav-right-item" title="Interface admin">
+      <i class="bi bi-gear"></i>
+    </a>
+  </div>
 </nav>
 
 <!-- ══ PANELS ══════════════════════════════════════════════════════════════ -->
@@ -58,6 +69,15 @@
 </main>
 
 <script>
+/* ── Thème ────────────────────────────────────────────────────────────────── */
+function setTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  localStorage.setItem('mm-theme', theme);
+  document.querySelectorAll('.theme-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById(`theme-btn-${theme}`)?.classList.add('active');
+}
+
+/* ── App ──────────────────────────────────────────────────────────────────── */
 const API = '';
 let activeTab = 'library';
 
@@ -103,16 +123,16 @@ async function checkService() {
   try {
     const r = await fetch(`${API}/api/admin/dashboard`);
     if (r.ok) {
-      dot.style.background   = 'var(--green)';
-      label.textContent      = 'OK';
-      label.style.color      = 'var(--green)';
+      dot.className   = 'service-dot ok';
+      label.className = 'service-label ok';
+      label.textContent = 'OK';
     } else {
       throw new Error();
     }
   } catch {
-    dot.style.background = 'var(--red)';
-    label.textContent    = 'hors ligne';
-    label.style.color    = 'var(--red)';
+    dot.className   = 'service-dot err';
+    label.className = 'service-label err';
+    label.textContent = 'hors ligne';
   }
 }
 
@@ -126,6 +146,7 @@ setInterval(checkService, 30000);
 <script src="rename.js"></script>
 <script>
 window.addEventListener('load', () => {
+  setTheme(localStorage.getItem('mm-theme') || 'dark');
   Library.init();
   Rename.loadBadge();
 });

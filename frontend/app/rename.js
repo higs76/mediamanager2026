@@ -22,13 +22,13 @@ const Rename = (() => {
       const badge = document.getElementById('rename-badge');
       if (badge) {
         badge.textContent = count.toLocaleString('fr-FR');
-        badge.style.display = count > 0 ? '' : 'none';
+        badge.classList.toggle('hidden', count === 0);
       }
     } catch(e) { console.warn('loadBadge:', e); }
   }
 
   /* ── Liste des titres avec propositions ───────────────────────────────── */
-async function _loadProposals() {
+  async function _loadProposals() {
     const el = document.getElementById('rename-content');
     el.innerHTML = `<div class="empty-state"><span class="spinner"></span></div>`;
 
@@ -36,14 +36,10 @@ async function _loadProposals() {
       const url = _catFilter
         ? `${API}/api/admin/library/proposals?category_id=${_catFilter}`
         : `${API}/api/admin/library/proposals`;
-      console.log('fetch url:', url);
       const r = await fetch(url);
-      console.log('status:', r.status);
       _proposals = await r.json();
-      console.log('proposals count:', _proposals.length);
       _renderProposalList();
     } catch(e) {
-      console.error('_loadProposals error:', e);
       el.innerHTML = `<div class="empty-state">
         <i class="bi bi-wifi-off"></i> Erreur de chargement</div>`;
     }
@@ -54,20 +50,18 @@ async function _loadProposals() {
 
     if (!_proposals.length) {
       el.innerHTML = `<div class="empty-state">
-        <i class="bi bi-check-circle" style="color:var(--green)"></i>
+        <i class="bi bi-check-circle text-green"></i>
         Aucune proposition en attente — tout est à jour !
       </div>`;
       return;
     }
 
-    // Grouper par catégorie
     const byCat = {};
     _proposals.forEach(p => {
       if (!byCat[p.category]) byCat[p.category] = [];
       byCat[p.category].push(p);
     });
 
-    // Filtres catégories
     const cats = Object.keys(byCat).sort();
     const tabsHtml = [
       `<button class="cat-tab${!_catFilter ? ' active' : ''}"
@@ -75,7 +69,6 @@ async function _loadProposals() {
          Toutes <span class="badge-count">${_proposals.length}</span>
        </button>`,
       ...cats.map(cat => {
-        const catId = _proposals.find(p => p.category === cat)?.category_id;
         return `<button class="cat-tab${_catFilter === cat ? ' active' : ''}"
            onclick="Rename.filterCat('${esc(cat)}')">
            ${esc(cap(cat))}
@@ -84,17 +77,24 @@ async function _loadProposals() {
       })
     ].join('');
 
-    // Liste des titres
-    const listHtml = Object.entries(byCat).map(([cat, items]) => `
-      <div style="margin-bottom:20px">
-        <div style="font-size:11px;font-weight:600;color:var(--muted);
-             text-transform:uppercase;letter-spacing:.05em;
-             padding:4px 0;margin-bottom:8px;
-             border-bottom:1px solid var(--border)">
+    const listHtml = _buildCatListHtml(byCat);
+
+    el.innerHTML = `
+      <div class="breadcrumb">
+        <i class="bi bi-pencil-square"></i> Renommage
+      </div>
+      <div class="cat-tabs">${tabsHtml}</div>
+      <div id="proposal-list">${listHtml}</div>`;
+  }
+
+  function _buildCatListHtml(byCat) {
+    return Object.entries(byCat).map(([cat, items]) => `
+      <div class="rename-cat-section">
+        <div class="section-label">
           <i class="bi bi-${items[0].has_seasons ? 'tv' : 'film'}"></i>
           ${esc(cap(cat))}
         </div>
-        <div class="card" style="padding:0">
+        <div class="card card-flush">
           ${items.map(p => `
             <div class="title-row" onclick="Rename.openTitle(${p.title_id})">
               <div>
@@ -108,23 +108,15 @@ async function _loadProposals() {
               </div>
               <div class="title-right">
                 <span class="badge badge-warn">${p.proposal_count}</span>
-                <i class="bi bi-chevron-right" style="color:var(--muted);font-size:12px"></i>
+                <i class="bi bi-chevron-right nav-chevron"></i>
               </div>
             </div>`).join('')}
         </div>
       </div>`).join('');
-
-    el.innerHTML = `
-      <div class="breadcrumb">
-        <i class="bi bi-pencil-square"></i> Renommage
-      </div>
-      <div class="cat-tabs">${tabsHtml}</div>
-      <div id="proposal-list">${listHtml}</div>`;
   }
 
   function filterCat(cat) {
     _catFilter = cat;
-    // Refiltrer localement
     const el = document.getElementById('proposal-list');
     if (!el) return;
     const filtered = cat
@@ -137,36 +129,8 @@ async function _loadProposals() {
       byCat[p.category].push(p);
     });
 
-    el.innerHTML = Object.entries(byCat).map(([cat, items]) => `
-      <div style="margin-bottom:20px">
-        <div style="font-size:11px;font-weight:600;color:var(--muted);
-             text-transform:uppercase;letter-spacing:.05em;
-             padding:4px 0;margin-bottom:8px;
-             border-bottom:1px solid var(--border)">
-          <i class="bi bi-${items[0].has_seasons ? 'tv' : 'film'}"></i>
-          ${esc(cap(cat))}
-        </div>
-        <div class="card" style="padding:0">
-          ${items.map(p => `
-            <div class="title-row" onclick="Rename.openTitle(${p.title_id})">
-              <div>
-                <div class="title-name">${esc(p.display_name)}</div>
-                <div class="title-meta">
-                  ${p.folder_status === 'to_rename'
-                    ? '<i class="bi bi-folder"></i> Dossier à renommer · '
-                    : ''}
-                  ${p.proposal_count} proposition${p.proposal_count > 1 ? 's' : ''}
-                </div>
-              </div>
-              <div class="title-right">
-                <span class="badge badge-warn">${p.proposal_count}</span>
-                <i class="bi bi-chevron-right" style="color:var(--muted);font-size:12px"></i>
-              </div>
-            </div>`).join('')}
-        </div>
-      </div>`).join('');
+    el.innerHTML = _buildCatListHtml(byCat);
 
-    // Mettre à jour les tabs
     document.querySelectorAll('.cat-tab').forEach(btn => {
       btn.classList.toggle('active',
         (cat === null && btn.textContent.includes('Toutes')) ||
@@ -206,13 +170,11 @@ async function _loadProposals() {
         <span>${esc(t.display_name)}</span>
       </div>
 
-      <div class="card" style="margin-bottom:16px">
-        <div style="display:flex;align-items:center;justify-content:space-between">
+      <div class="card card-mb">
+        <div class="prop-title-head">
           <div>
-            <div style="font-size:17px;font-weight:600;margin-bottom:4px">
-              ${esc(t.display_name)}
-            </div>
-            <div style="font-size:12px;color:var(--muted)">
+            <div class="prop-title-name">${esc(t.display_name)}</div>
+            <div class="prop-title-sub">
               ${totalProps} proposition${totalProps > 1 ? 's' : ''} en attente
             </div>
           </div>
@@ -230,21 +192,36 @@ async function _loadProposals() {
   function _renderFolderProposal(t) {
     const p = t.title_proposal;
     return `
-      <div class="card" style="margin-bottom:12px;border-color:var(--orange)">
-        <div style="font-size:11px;font-weight:600;color:var(--orange);
-             text-transform:uppercase;letter-spacing:.04em;margin-bottom:10px">
+      <div class="card card-warn">
+        <div class="folder-prop-label">
           <i class="bi bi-folder"></i> Dossier série à renommer
         </div>
-        <div style="font-size:11px;color:var(--muted);margin-bottom:8px;
-             font-family:monospace;padding:5px 8px;background:var(--bg3);border-radius:6px">
-          Actuel : ${esc(p.current_name)}/
-        </div>
+        <div class="folder-prop-current">Actuel : ${esc(p.current_name)}/</div>
         ${_blocksHtml({
-          propId:   p.prop_id,
-          type:     'folder',
-          serie:    p.proposed_name,
+          propId:    p.prop_id,
+          type:      'folder',
+          serie:     p.proposed_name,
           origSerie: p.proposed_name,
         })}
+      </div>`;
+  }
+
+  function _blocksHtml({ propId, serie, origSerie }) {
+    const uid = `p${propId}`;
+    return `
+      <div class="prop-blocs-row">
+        ${_blocCell(uid, 'serie', 'Dossier', serie, origSerie, 'text', 'bloc-cell-solo')}
+      </div>
+      <div class="prop-actions-row">
+        <div id="${uid}-preview" class="rename-preview">${esc(serie)}/</div>
+        <button onclick="Rename.acceptItem('${uid}', ${propId})"
+                class="btn btn-sm btn-success btn-compact">
+          <i class="bi bi-check2"></i>
+        </button>
+        <button onclick="Rename.rejectItem(${propId}, this)"
+                class="btn btn-sm btn-danger btn-compact">
+          <i class="bi bi-x"></i>
+        </button>
       </div>`;
   }
 
@@ -259,13 +236,12 @@ async function _loadProposals() {
                    : sNum === 0   ? 'Spéciaux'
                    : `Saison ${String(sNum).padStart(2,'0')}`;
 
-      return `<div class="tree-item" style="margin-bottom:8px">
-        <div class="tree-header" onclick="toggleTree(this)">
-          <div style="display:flex;align-items:center;gap:8px">
-            <i class="bi bi-chevron-right"
-               style="font-size:12px;color:var(--muted);transition:transform .15s"></i>
-            <span style="font-weight:500">${esc(sLabel)}</span>
-            <span style="font-size:11px;color:var(--muted)">
+      return `<div class="tree-item tree-item-mb">
+        <div class="tree-header" onclick="toggleTree(this.parentElement.querySelector('.tree-body'), this.querySelector('.rename-chevron'))">
+          <div class="rename-tree-head">
+            <i class="bi bi-chevron-right rename-chevron"></i>
+            <span class="rename-season-label">${esc(sLabel)}</span>
+            <span class="rename-season-count">
               ${items.length} proposition${items.length > 1 ? 's' : ''}
             </span>
           </div>
@@ -299,80 +275,57 @@ async function _loadProposals() {
     const uid = `p${item.prop_id}`;
 
     return `
-      <div style="margin-bottom:16px;padding-bottom:16px;
-           border-bottom:1px solid var(--border)">
+      <div class="prop-item">
 
-        <!-- Ligne 1 : fichier actuel + badges -->
-        <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px">
-          <div style="font-size:10px;color:var(--muted);font-family:monospace;
-               padding:4px 8px;background:var(--bg3);border-radius:4px;
-               overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1"
-               title="${esc(item.current_name)}">
+        <div class="prop-file-row">
+          <div class="prop-filename" title="${esc(item.current_name)}">
             ${esc(item.current_name)}
           </div>
-          ${res ? `<span class="badge badge-muted" style="flex-shrink:0">${res}</span>` : ''}
+          ${res ? `<span class="badge badge-muted flex-shrink-0">${res}</span>` : ''}
           ${item.hdr && item.hdr !== 'SDR'
-            ? `<span class="badge" style="flex-shrink:0;color:var(--purple);
-               background:rgba(163,113,247,.15)">${esc(item.hdr)}</span>`
+            ? `<span class="badge hdr-badge-rename flex-shrink-0">${esc(item.hdr)}</span>`
             : ''}
         </div>
 
-        <!-- Ligne 2 : blocs connectés -->
-        <div style="display:flex;align-items:stretch;margin-bottom:10px">
+        <div class="prop-blocs-row">
 
-          ${_blocCell(uid,'serie','Série', origSerie, origSerie,'text',
-              'flex:2;border-radius:var(--radius) 0 0 var(--radius)')}
+          ${_blocCell(uid,'serie','Série', origSerie, origSerie,'text', 'bloc-cell-first')}
 
-          <div style="display:flex;align-items:center;padding:0 6px;
-               font-family:monospace;font-size:12px;color:var(--muted);
-               background:var(--bg);
-               border-top:1px solid var(--border);
-               border-bottom:1px solid var(--border)">${esc(sep1)}</div>
+          <div class="sep-cell">${esc(sep1)}</div>
 
           ${_blocCell(uid,'saison','Saison',
               String(origSaison).padStart(digS,'0'), String(origSaison),
-              'number', 'border-left:none;border-radius:0')}
+              'number', 'bloc-cell-mid')}
 
-          <div style="display:flex;align-items:center;padding:0 6px;
-               font-family:monospace;font-size:12px;color:var(--muted);
-               background:var(--bg);
-               border-top:1px solid var(--border);
-               border-bottom:1px solid var(--border)">${esc(sepSE)}</div>
+          <div class="sep-cell">${esc(sepSE)}</div>
 
           ${_blocCell(uid,'episode','Épisode',
               String(origEp).padStart(digE,'0'), String(origEp),
-              'number', 'border-left:none;border-radius:0')}
+              'number', 'bloc-cell-mid')}
 
-          <div style="display:flex;align-items:center;padding:0 6px;
-               font-family:monospace;font-size:12px;color:var(--muted);
-               background:var(--bg);
-               border-top:1px solid var(--border);
-               border-bottom:1px solid var(--border)">${esc(sep2)}</div>
+          <div class="sep-cell">${esc(sep2)}</div>
 
           ${_blocCell(uid,'titre',
               'Titre <span style="opacity:.5;font-size:9px">(opt.)</span>',
               origTitre || 'vide', origTitre, 'text',
-              'flex:3;border-left:none;border-radius:0 var(--radius) var(--radius) 0',
-              !origTitre)}
+              'bloc-cell-last', !origTitre)}
 
         </div>
 
-        <!-- Ligne 3 : aperçu + actions -->
-        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-          <div id="${uid}-preview" class="rename-preview" style="flex:1;min-width:150px">
+        <div class="prop-actions-row">
+          <div id="${uid}-preview" class="rename-preview prop-preview">
             ${esc(item.proposed_name)}
           </div>
           <button id="${uid}-mkv" onclick="Rename.toggleMkv('${uid}')"
-                  class="btn btn-sm" title="Mettre à jour le tag title MKV"
-                  style="padding:4px 10px">
+                  class="btn btn-sm btn-compact" title="Mettre à jour le tag title MKV">
             <i class="bi bi-file-earmark-check"></i> MKV
           </button>
           <button onclick="Rename.acceptItem('${uid}', ${item.prop_id})"
-                  class="btn btn-sm btn-success" style="padding:4px 10px">
+                  class="btn btn-sm btn-success btn-compact">
             <i class="bi bi-check2"></i>
           </button>
           <button onclick="Rename.rejectItem(${item.prop_id}, this)"
-                  class="btn btn-sm btn-danger" style="padding:4px 10px">
+                  class="btn btn-sm btn-danger btn-compact">
             <i class="bi bi-x"></i>
           </button>
         </div>
@@ -380,65 +333,36 @@ async function _loadProposals() {
       </div>`;
   }
 
-  function _blocCell(uid, field, label, displayVal, origVal, type, extraStyle, isEmpty) {
+  function _blocCell(uid, field, label, displayVal, origVal, type, cellClass, isEmpty) {
     const id = `${uid}-${field}`;
+    const wrapClass = type === 'number' ? 'bloc-val-wrap-num' : 'bloc-val-wrap';
     return `
-      <div style="background:var(--bg3);border:1px solid var(--border);
-           overflow:hidden;${extraStyle}">
-
-        <!-- Label -->
-        <div style="font-size:10px;color:var(--muted);padding:3px 8px;
-             border-bottom:1px solid var(--border);
-             text-transform:uppercase;letter-spacing:.04em;text-align:center">
-          ${label}
-        </div>
-
-        <!-- Valeur + boutons -->
-        <div style="padding:5px 8px;display:flex;gap:4px;align-items:center">
-
-          <!-- Zone valeur/input superposés -->
-          <div style="flex:1;position:relative;
-               min-width:${type==='number' ? '36px' : '60px'};
-               height:22px">
+      <div class="bloc-cell ${cellClass}">
+        <div class="bloc-cell-label">${label}</div>
+        <div class="bloc-cell-body">
+          <div class="${wrapClass}">
             <div id="${id}-disp"
-                 class="rename-bloc-val${isEmpty ? ' empty' : ''}"
+                 class="bloc-disp${isEmpty ? ' empty' : ''}"
                  onclick="Rename.startEdit('${id}','${type}')"
                  title="Cliquer pour modifier"
-                 style="cursor:text;position:absolute;inset:0;
-                 display:flex;align-items:center;
-                 font-family:monospace;font-size:12px;
-                 white-space:nowrap;overflow:hidden"
                  data-orig="${esc(origVal)}">
               ${esc(displayVal) || 'vide'}
             </div>
             <input id="${id}-inp" type="${type}"
-                   style="display:none;position:absolute;inset:0;
-                   font-family:monospace;font-size:12px;
-                   padding:0;border:none;background:transparent;
-                   color:var(--text);outline:none;width:100%;height:100%"
+                   class="bloc-inp"
                    value="${esc(origVal)}"
                    onblur="Rename.endEdit('${id}','${uid}')"
                    onkeydown="if(event.key==='Enter'||event.key==='Tab'){
                      event.preventDefault();Rename.endEdit('${id}','${uid}')}">
           </div>
-
-          <!-- Bouton réinitialiser -->
           <button onclick="Rename.resetBloc('${id}','${esc(origVal)}')"
-                  style="background:none;border:1px solid rgba(249,115,22,.4);
-                  border-radius:50%;width:20px;height:20px;cursor:pointer;
-                  display:flex;align-items:center;justify-content:center;
-                  font-size:10px;color:var(--orange);flex-shrink:0;padding:0"
+                  class="bloc-circle-btn bloc-reset-btn"
                   title="Remettre la valeur proposée">
             <i class="bi bi-arrow-counterclockwise"></i>
           </button>
-
-          <!-- Bouton valider -->
           <button id="${id}-vbtn"
                   onclick="Rename.toggleValidate('${id}')"
-                  style="background:#3fb950;border:none;border-radius:50%;
-                  width:20px;height:20px;cursor:pointer;
-                  display:flex;align-items:center;justify-content:center;
-                  font-size:10px;color:#fff;flex-shrink:0;padding:0"
+                  class="bloc-circle-btn bloc-ok-btn"
                   title="Valider ce bloc">
             <i class="bi bi-check2"></i>
           </button>
@@ -446,7 +370,7 @@ async function _loadProposals() {
       </div>`;
   }
 
-  /* ── Bloc input cliquable ─────────────────────────────────────────────── */
+  /* ── Bloc input cliquable (ancien format, conservé) ───────────────────── */
   function _blocInput(uid, field, label, displayVal, origVal, type, style, isEmpty) {
     const id = `${uid}-${field}`;
     return `
@@ -486,10 +410,9 @@ async function _loadProposals() {
     const inp  = document.getElementById(`${id}-inp`);
     if (!disp || !inp) return;
     disp.style.display = 'none';
-    inp.style.display  = '';
-    // Fond légèrement différent pour indiquer le mode édition
-    const bloc = inp.closest('div[style*="background:var(--bg3)"]');
-    if (bloc) bloc.style.background = 'var(--input-bg)';
+    inp.style.display  = 'block';
+    const bloc = inp.closest('.bloc-cell');
+    if (bloc) bloc.classList.add('editing');
     inp.focus();
     if (type === 'text') inp.select();
   }
@@ -503,9 +426,8 @@ async function _loadProposals() {
     disp.classList.toggle('empty', !val);
     disp.style.display = '';
     inp.style.display  = 'none';
-    // Remettre le fond normal
-    const bloc = inp.closest('div[style*="background"]');
-    if (bloc) bloc.style.background = 'var(--bg3)';
+    const bloc = inp.closest('.bloc-cell');
+    if (bloc) bloc.classList.remove('editing');
     _updatePreview(uid);
   }
 
@@ -521,8 +443,9 @@ async function _loadProposals() {
     disp.style.display = '';
     inp.style.display  = 'none';
     if (vbtn) {
-      vbtn.className = 'btn btn-sm btn-success';
+      vbtn.className = 'bloc-circle-btn bloc-ok-btn';
       vbtn.innerHTML = '<i class="bi bi-check2"></i>';
+      vbtn.title     = 'Valider ce bloc';
     }
     const uid = id.split('-').slice(0,-1).join('-');
     _updatePreview(uid);
@@ -534,11 +457,11 @@ async function _loadProposals() {
     if (!disp || !vbtn) return;
     const isVal = disp.classList.toggle('validated');
     if (isVal) {
-      vbtn.className = 'btn btn-sm';
+      vbtn.className = 'bloc-circle-btn bloc-ok-btn validated';
       vbtn.innerHTML = '<i class="bi bi-arrow-counterclockwise"></i>';
       vbtn.title     = 'Annuler la validation';
     } else {
-      vbtn.className = 'btn btn-sm btn-success';
+      vbtn.className = 'bloc-circle-btn bloc-ok-btn';
       vbtn.innerHTML = '<i class="bi bi-check2"></i>';
       vbtn.title     = 'Valider ce bloc';
     }
@@ -559,12 +482,12 @@ async function _loadProposals() {
     };
 
     const serie   = get('serie');
-    const saison  = get('saison');
-    const episode = get('episode');
     const titre   = get('titre');
 
-    if (saison !== undefined && episode !== undefined) {
-      // Épisode
+    const saisonEl = document.getElementById(`${uid}-saison-inp`);
+    if (saisonEl) {
+      const saison  = get('saison');
+      const episode = get('episode');
       const sep1  = tpl.sep1   || ' - ';
       const sep2  = tpl.sep2   || ' - ';
       const sepSE = tpl.sep_se || 'x';
@@ -579,7 +502,7 @@ async function _loadProposals() {
         ? `${serie}${sep1}${num}${sep2}${titre}.mkv`
         : `${serie}${sep1}${num}.mkv`;
     } else {
-      prev.textContent = serie + '.mkv';
+      prev.textContent = serie + '/';
     }
   }
 
@@ -610,14 +533,9 @@ async function _loadProposals() {
       });
       if (!r.ok) throw new Error((await r.json()).detail);
 
-      // Marquer visuellement comme validé
-      const row = prev?.closest('div[style*="margin-bottom:12px"]');
-      if (row) {
-        row.style.opacity = '.5';
-        row.style.pointerEvents = 'none';
-        prev.style.borderColor = 'var(--green)';
-        prev.style.color = 'var(--green)';
-      }
+      const row = prev?.closest('.prop-item');
+      if (row) row.classList.add('prop-accepted');
+      if (prev) prev.classList.add('rename-preview-ok');
       loadBadge();
     } catch(e) {
       alert('Erreur : ' + e.message);
@@ -631,20 +549,13 @@ async function _loadProposals() {
       });
       if (!r.ok) throw new Error((await r.json()).detail);
 
-      const row = btn?.closest('div[style*="margin-bottom:12px"]');
-      if (row) {
-        row.style.opacity = '.3';
-        row.style.pointerEvents = 'none';
-      }
+      const row = btn?.closest('.prop-item');
+      if (row) row.classList.add('prop-accepted');
       loadBadge();
     } catch(e) {
       alert('Erreur : ' + e.message);
     }
   }
-
-
-
-  
 
   /* ── Helpers ──────────────────────────────────────────────────────────── */
   function cap(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }

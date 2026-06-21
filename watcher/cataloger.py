@@ -20,7 +20,7 @@ from datetime import datetime
 
 from sqlalchemy import text
 from watcher.database import engine
-from watcher.scanner import get_config
+from watcher.config_db import get_config, get_video_extensions
 
 logger = logging.getLogger(__name__)
 
@@ -372,7 +372,6 @@ def _process_movie_folder(mount_id, category_id, template,
 
 def _process_movie_files(mount_id, title_id, template, folder_path,
                           folder_name, clean_folder, year, bonus_folder):
-    from watcher.scanner import get_video_extensions
     exts = get_video_extensions()
 
     try:
@@ -527,7 +526,6 @@ def _process_season_folders(mount_id, title_id, template,
                              serie_folder, serie_path, serie_name):
     bonus_folders = {'bonus', 'extras', 'featurettes'}
     special = (template.get('special_folder') or 'S0').lower()
-    from watcher.scanner import get_video_extensions
     exts = get_video_extensions()
 
     try:
@@ -678,3 +676,52 @@ def run_cataloger():
             logger.error(f"run_cataloger mount {mount_id}: {e}")
 
     logger.info("Catalogueur terminé")
+
+
+# ─────────────────────────────────────────────────────────────
+# CatalogQueue — file d'exécution asynchrone
+# ─────────────────────────────────────────────────────────────
+
+class CatalogQueue:
+    """
+    File dédiée au catalogueur.
+    Tourne dans son propre thread daemon pour ne pas bloquer l'AnalyzeQueue.
+    Déclenché par trigger() à la fin de chaque session d'analyse.
+    """
+
+    def __init__(self):
+        self._event   = threading.Event()
+        self._thread  = None
+        self._running = False
+
+    def start(self):
+        self._running = True
+        self._thread  = threading.Thread(
+            target=self._worker, daemon=True, name="CatalogQueueWorker"
+        )
+        self._thread.start()
+        logger.info("CatalogQueue démarrée")
+
+    def stop(self):
+        self._running = False
+        self._event.set()
+
+    def trigger(self):
+        """Déclenche une passe de catalogage. Appelé après analyse ou manuellement."""
+        self._event.set()
+
+    def _worker(self):
+        time.sleep(8)  # Attendre que la BDD et l'analyze soient prêtes
+        while self._running:
+            self._event.wait(timeout=1800)
+            self._event.clear()
+            if not self._running:
+                break
+            try:
+                run_cataloger()
+            except Exception as e:
+                logger.error(f"CatalogQueue: {e}")
+
+
+# Instance globale
+catalog_queue = CatalogQueue()

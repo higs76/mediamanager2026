@@ -17,10 +17,9 @@
     <!-- Brand -->
         <div class="brand">
       <span class="brand-name">MM2026</span>
-      <span class="brand-tag" id="app-version"
+      <span class="brand-tag cursor-pointer" id="app-version"
             onclick="forceVersionCheck()"
-            title="Cliquer pour vérifier maintenant"
-            style="cursor:pointer">—</span>
+            title="Cliquer pour vérifier maintenant">—</span>
       <span class="update-badge" id="update-badge" onclick="triggerUpdate()">
         <i class="bi bi-arrow-up-circle"></i>
         <span id="update-label">Màj</span>
@@ -40,6 +39,9 @@
       </button>
       <button class="nav-item" data-tab="config" onclick="switchTab('config')">
         <i class="bi bi-gear"></i> Config
+      </button>
+      <button class="nav-item" data-tab="perf" onclick="switchTab('perf')">
+        <i class="bi bi-stopwatch"></i> Perf
       </button>
     </div>
   </div>
@@ -113,7 +115,7 @@
           <span class="stats-divider">|</span>
           <div class="stats-pill" id="stat-categories-pill">
             <span class="lbl"><i class="bi bi-collection"></i> Catégories :</span>
-            <span id="stat-categories-list" style="color:var(--muted)">—</span>
+            <span id="stat-categories-list" class="text-muted">—</span>
           </div>
         </div>
         <i class="bi bi-chevron-down stats-chevron" id="stats-chevron"></i>
@@ -123,25 +125,25 @@
           <div class="stats-box">
             <div class="stats-box-title">
               <span>Flux de fichiers</span>
-              <span id="stat-files-pct" style="color:var(--green)">—</span>
+              <span id="stat-files-pct" class="text-success">—</span>
             </div>
-            <div style="font-size:1.1rem;font-weight:700;margin-bottom:6px" id="stat-files-label">—</div>
+            <div class="stat-label" id="stat-files-label">—</div>
             <div class="progress-bg"><div class="progress-fill" id="stat-files-bar" style="width:0%"></div></div>
             <div class="progress-legend">
               <span>Traités : <span id="stat-files-ok2">—</span></span>
               <span>En attente : <span id="stat-files-wait2">—</span></span>
             </div>
-            <div style="margin-top:6px;font-size:.75rem;color:var(--muted);line-height:1.8">
+            <div class="stat-meta">
               Poids : <strong id="stat-files-size">—</strong><br>
-              Manquants : <strong id="stat-files-missing" style="color:var(--orange,#f97316)">—</strong>
+              Manquants : <strong id="stat-files-missing" class="text-warn">—</strong>
               &nbsp;·&nbsp;
-              Doublons : <strong id="stat-files-duplicate" style="color:var(--red)">—</strong>
+              Doublons : <strong id="stat-files-duplicate" class="text-danger">—</strong>
             </div>
           </div>
           <div class="stats-box">
             <div class="stats-box-title"><span>Montages NAS</span></div>
-            <div style="font-size:1.1rem;font-weight:700;margin-bottom:6px" id="stat-mounts-label">—</div>
-            <div class="progress-bg"><div class="progress-fill" id="stat-mounts-bar" style="width:0%;background:var(--blue)"></div></div>
+            <div class="stat-label" id="stat-mounts-label">—</div>
+            <div class="progress-bg"><div class="progress-fill progress-blue" id="stat-mounts-bar" style="width:0%"></div></div>
             <div class="progress-legend">
               <span>Montés : <span id="stat-mounts-up2">—</span></span>
               <span>En erreur : <span id="stat-mounts-down2">—</span></span>
@@ -149,8 +151,8 @@
           </div>
           <div class="stats-box" id="stat-db-box">
             <div class="stats-box-title"><span>Base de données</span></div>
-            <div id="stat-db-size" style="font-size:.85rem">—</div>
-            <div style="font-size:.75rem;color:var(--muted);margin-top:4px">
+            <div id="stat-db-size" class="text-sm">—</div>
+            <div class="stat-hint">
               Taille PostgreSQL
             </div>
           </div>
@@ -158,17 +160,17 @@
           <div class="stats-box">
             <div class="stats-box-title">
               <span>Jobs</span>
-              <span id="jobs-indicator" style="font-size:.72rem"></span>
+              <span id="jobs-indicator" class="text-xs"></span>
             </div>
-            <div id="jobs-detail" style="font-size:.78rem;line-height:1.8;color:var(--muted)">
+            <div id="jobs-detail" class="stat-detail">
               —
             </div>
           </div>
           <div class="stats-box">
               <div class="stats-box-title">BIBLIOTHÈQUE</div>
               <div class="stat-value" id="stat-lib-titles">—</div>
-              <div style="font-size:.75rem;color:var(--muted);margin-top:4px">Titres détectés</div>
-              <div style="margin-top:8px;font-size:.78rem;color:var(--muted)">
+              <div class="stat-hint">Titres détectés</div>
+              <div class="stat-sub">
                 Durée totale : <strong id="stat-lib-hours">—</strong>
               </div>
           </div>
@@ -200,7 +202,7 @@
       </div>
 
       <!-- Bannière sync -->
-      <div class="alert" id="sync-banner" style="display:none"></div>
+      <div class="alert hidden" id="sync-banner"></div>
 
       <!-- Filtres catégories -->
       <div class="tabs" id="cat-filters">
@@ -217,10 +219,10 @@
               <th>Type</th>
               <th>Source</th>
               <th title="Chemin complet : /home/mediamanager/MediaManagerMnt/...">
-                CHEMIN LOCAL <i class="bi bi-info-circle" style="font-size:.75rem;opacity:.5"></i>
+                CHEMIN LOCAL <i class="bi bi-info-circle icon-sm"></i>
               </th>
               <th>Statut</th>
-              <th style="width:90px;text-align:center">Actions</th>
+              <th class="th-actions">Actions</th>
             </tr>
           </thead>
           <tbody id="mounts-tbody">
@@ -238,8 +240,8 @@
     <div class="card">
       <div class="card-header"><i class="bi bi-terminal"></i> Journal du service</div>
       <div class="log-controls">
-        <label for="log-lines" style="font-size:.82rem;color:var(--muted)">Lignes :</label>
-        <select id="log-lines" style="width:80px" onchange="loadLogs()">
+        <label for="log-lines" class="text-sm text-muted">Lignes :</label>
+        <select id="log-lines" class="select-sm" onchange="loadLogs()">
           <option value="50" selected>50</option>
           <option value="100">100</option>
           <option value="200">200</option>
@@ -247,7 +249,7 @@
         <button class="btn btn-sm" onclick="loadLogs()">
           <i class="bi bi-arrow-clockwise"></i> Rafraîchir
         </button>
-        <span style="font-size:.75rem;color:var(--muted);margin-left:auto">Auto-refresh 5s</span>
+        <span class="text-75 text-muted ms-auto">Auto-refresh 5s</span>
       </div>
       <div class="log-box" id="log-box">
         <div class="log-line">Chargement…</div>
@@ -265,10 +267,10 @@
   </div>
 
   <!-- Filtre catégories -->
-  <div class="tabs" id="stats-cat-tabs" style="margin-bottom:20px"></div>
+  <div class="tabs mb-20" id="stats-cat-tabs"></div>
 
   <!-- KPIs -->
-  <div class="kpi-grid" style="margin-bottom:24px">
+  <div class="kpi-grid">
     <div class="kpi-card">
       <div class="kpi-icon"><i class="bi bi-film"></i></div>
       <div class="kpi-value" id="kpi-total">—</div>
@@ -305,7 +307,7 @@
   <div class="stats-section-title">
     <i class="bi bi-camera-video"></i> Vidéo
   </div>
-  <div class="charts-grid" style="margin-bottom:24px">
+  <div class="charts-grid mb-24">
     <div class="chart-card">
       <div class="chart-title">Codecs vidéo</div>
       <canvas id="chart-codecs"></canvas>
@@ -332,7 +334,7 @@
   <div class="stats-section-title">
     <i class="bi bi-volume-up"></i> Audio
   </div>
-  <div class="charts-grid" style="margin-bottom:16px">
+  <div class="charts-grid mb-16">
     <div class="chart-card">
       <div class="chart-title">Codecs audio</div>
       <canvas id="chart-audio-codecs"></canvas>
@@ -343,7 +345,7 @@
       <canvas id="chart-audio-channels"></canvas>
       <div class="chart-legend" id="legend-audio-channels"></div>
     </div>
-    <div class="chart-card" style="grid-column: span 2">
+    <div class="chart-card col-2">
       <div class="chart-title">Langues audio</div>
       <div class="tags-container" id="tags-audio-langs"></div>
     </div>
@@ -353,13 +355,13 @@
   <div class="stats-section-title">
     <i class="bi bi-chat-square-text"></i> Sous-titres
   </div>
-  <div class="charts-grid" style="margin-bottom:24px">
+  <div class="charts-grid mb-24">
     <div class="chart-card">
       <div class="chart-title">Présence sous-titres</div>
       <canvas id="chart-sub-presence"></canvas>
       <div class="chart-legend" id="legend-sub-presence"></div>
     </div>
-    <div class="chart-card" style="grid-column: span 3">
+    <div class="chart-card col-3">
       <div class="chart-title">Langues sous-titres</div>
       <div class="tags-container" id="tags-sub-langs"></div>
     </div>
@@ -370,7 +372,7 @@
     <i class="bi bi-collection-play"></i> Titres détectés
     <span class="stats-section-sub" id="titles-count"></span>
   </div>
-  <div class="chart-card" style="margin-bottom:24px">
+  <div class="chart-card mb-24">
     <div id="titles-list"></div>
   </div>
 
@@ -385,6 +387,90 @@
     </button>
   </div>
   <div id="config-list"></div>
+</div>
+
+<!-- ══ PANEL : Perf ══════════════════════════════════════════════════════════ -->
+<div id="panel-perf" class="tab-panel">
+  <div class="page-header">
+    <h2>Performances SQL</h2>
+    <div class="flex-row">
+      <button class="btn btn-sm" onclick="Perf.load()">
+        <i class="bi bi-arrow-clockwise"></i> Rafraîchir
+      </button>
+      <button class="btn btn-sm btn-danger" onclick="Perf.clear()">
+        <i class="bi bi-trash"></i> Vider
+      </button>
+    </div>
+  </div>
+
+  <!-- Compteurs ring buffer -->
+  <div class="kpi-row">
+    <div class="kpi-card">
+      <div class="kpi-icon"><i class="bi bi-database"></i></div>
+      <div class="kpi-body">
+        <div class="kpi-value" id="perf-buffered">—</div>
+        <div class="kpi-label">En mémoire</div>
+      </div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-icon"><i class="bi bi-hash"></i></div>
+      <div class="kpi-body">
+        <div class="kpi-value" id="perf-total">—</div>
+        <div class="kpi-label">Total enregistrées</div>
+      </div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-icon"><i class="bi bi-circle"></i></div>
+      <div class="kpi-body">
+        <div class="kpi-value" id="perf-ring">—</div>
+        <div class="kpi-label">Taille ring buffer</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Résumé par requête -->
+  <div class="section-title">
+    <i class="bi bi-bar-chart-line"></i> Résumé par requête <small class="text-muted">(trié par durée moyenne décroissante — <span class="perf-warn">orange</span> &gt;100ms, <span class="perf-slow">rouge</span> &gt;500ms)</small>
+  </div>
+  <div class="table-wrap mb-24">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Endpoint</th>
+          <th>Requête</th>
+          <th>Appels</th>
+          <th>Moy.</th>
+          <th>Max</th>
+          <th>Min</th>
+          <th>Lignes moy.</th>
+        </tr>
+      </thead>
+      <tbody id="perf-summary-body">
+        <tr><td colspan="7" class="perf-empty">Chargement…</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Derniers enregistrements -->
+  <div class="section-title">
+    <i class="bi bi-clock-history"></i> 100 derniers enregistrements
+  </div>
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Heure</th>
+          <th>Endpoint</th>
+          <th>Requête</th>
+          <th>Durée</th>
+          <th>Lignes</th>
+        </tr>
+      </thead>
+      <tbody id="perf-records-body">
+        <tr><td colspan="5" class="perf-empty">Chargement…</td></tr>
+      </tbody>
+    </table>
+  </div>
 </div>
 
   <!-- ── API ──────────────────────────────────────────────────────────────── -->
@@ -425,16 +511,16 @@
         <div class="card-header"><i class="bi bi-tools"></i> Test &amp; Docs</div>
         <div class="card-row">
           <span class="card-label">Base URL</span>
-          <code id="base-url" style="font-family:'JetBrains Mono',monospace;font-size:.78rem;color:var(--blue)">—</code>
+          <code id="base-url" class="mono-blue">—</code>
         </div>
-        <div style="margin-top:12px;display:flex;flex-direction:column;gap:8px">
+        <div class="flex-col mt-12">
           <a href="/docs" target="_blank" class="btn btn-sm">
             <i class="bi bi-box-arrow-up-right"></i> Swagger UI
           </a>
           <button class="btn btn-sm" onclick="testAPIConn()">
             <i class="bi bi-wifi"></i> Tester la connexion
           </button>
-          <div id="api-test-result" style="margin-top:4px"></div>
+          <div id="api-test-result" class="mt-4"></div>
         </div>
       </div>
     </div>
@@ -446,14 +532,14 @@
 <div class="modal-overlay" id="overlay-mount">
   <div class="modal modal-lg">
     <div class="modal-header">
-      <div style="display:flex;flex-direction:column;gap:4px">
+      <div class="flex-col-xs">
         <h3 id="modal-mount-title">Ajouter des montages</h3>
         <!-- Indicateur d'étapes -->
         <div class="wizard-steps" id="wizard-steps">
           <span class="wizard-step active" data-step="1">1. Serveur</span>
-          <i class="bi bi-chevron-right" style="font-size:.7rem;opacity:.4"></i>
+          <i class="bi bi-chevron-right icon-dim"></i>
           <span class="wizard-step" data-step="2">2. Partages</span>
-          <i class="bi bi-chevron-right" style="font-size:.7rem;opacity:.4"></i>
+          <i class="bi bi-chevron-right icon-dim"></i>
           <span class="wizard-step" data-step="3">3. Confirmation</span>
         </div>
       </div>
@@ -524,7 +610,7 @@
         </div>
 
         <!-- Champs serveur NFS -->
-        <div id="wfields-nfs" style="display:none">
+        <div id="wfields-nfs" class="hidden">
           <div class="form-grid">
             <div class="form-group">
               <label class="form-label">Serveur <span class="req">*</span></label>
@@ -540,13 +626,13 @@
           </div>
         </div>
 
-        <div id="wizard-step1-error" class="form-error" style="display:none"></div>
+        <div id="wizard-step1-error" class="form-error hidden"></div>
       </div>
 
       <!-- ── Étape 2 : Partages ────────────────────────────────────────── -->
       <div class="wizard-panel" id="wizard-step-2">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-          <span style="font-size:.85rem;color:var(--muted)">
+        <div class="flex-between mb-12">
+          <span class="text-sm text-muted">
             Sélectionnez les partages à monter et associez une catégorie à chacun.
           </span>
           <button class="btn btn-sm" id="btn-browse" onclick="Mounts.wizardBrowse()">
@@ -555,19 +641,19 @@
         </div>
 
         <!-- Grille des partages -->
-        <div id="wizard-shares-grid" style="min-height:80px">
-          <div style="color:var(--muted);font-size:.84rem;padding:20px 0;text-align:center">
+        <div id="wizard-shares-grid">
+          <div class="wizard-shares-msg">
             Cliquez sur « Scanner les partages » pour découvrir les partages disponibles.
           </div>
         </div>
 
         <!-- Nouvelle catégorie -->
-        <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border)">
+        <div class="section-divider">
           <div class="form-grid">
-            <div class="form-group" style="margin:0">
+            <div class="form-group m-0">
               <label class="form-label">Créer une nouvelle catégorie</label>
-              <div style="display:flex;gap:8px">
-                <input id="w-newcat" type="text" placeholder="ex: concerts, sport…" style="flex:1">
+              <div class="flex-row">
+                <input id="w-newcat" type="text" placeholder="ex: concerts, sport…" class="flex-1">
                 <button class="btn btn-sm btn-success" onclick="Mounts.wizardAddCategory()">
                   <i class="bi bi-plus-lg"></i> Ajouter
                 </button>
@@ -577,29 +663,26 @@
           </div>
         </div>
 
-        <div id="wizard-step2-error" class="form-error" style="display:none"></div>
+        <div id="wizard-step2-error" class="form-error hidden"></div>
       </div>
 
       <!-- ── Étape 3 : Confirmation ────────────────────────────────────── -->
       <div class="wizard-panel" id="wizard-step-3">
-        <p style="font-size:.84rem;color:var(--muted);margin-bottom:12px">
+        <p class="hint-p">
           Récapitulatif des montages qui vont être créés :
         </p>
         <div id="wizard-summary"></div>
-        <div id="wizard-step3-error" class="form-error" style="display:none"></div>
+        <div id="wizard-step3-error" class="form-error hidden"></div>
       </div>
 
     </div>
 
     <!-- Erreur générale -->
-    <div id="modal-mount-error" style="display:none;margin:0 24px 12px;padding:10px 14px;
-         background:var(--red-bg,#3a1a1a);color:var(--red,#f87171);border-radius:6px;
-         font-size:.84rem;border:1px solid var(--red,#f87171)">
-    </div>
+    <div id="modal-mount-error" class="modal-error"></div>
 
     <div class="modal-footer">
       <button class="btn" onclick="Mounts.closeMount()">Annuler</button>
-      <button class="btn" id="btn-wizard-prev" style="display:none" onclick="Mounts.wizardPrev()">
+      <button class="btn hidden" id="btn-wizard-prev" onclick="Mounts.wizardPrev()">
         <i class="bi bi-arrow-left"></i> Retour
       </button>
       <button class="btn btn-primary" id="btn-wizard-next" onclick="Mounts.wizardNext()">
@@ -655,10 +738,7 @@
         </div>
       </div>
     </div>
-    <div id="modal-edit-error" style="display:none;margin:0 24px 12px;padding:10px 14px;
-         background:var(--red-bg,#3a1a1a);color:var(--red,#f87171);border-radius:6px;
-         font-size:.84rem;border:1px solid var(--red,#f87171)">
-    </div>
+    <div id="modal-edit-error" class="modal-error"></div>
     <div class="modal-footer">
       <button class="btn" onclick="Mounts.closeEditMount()">Annuler</button>
       <button class="btn btn-primary" id="btn-save-edit" onclick="Mounts.saveEdit()">
@@ -697,11 +777,11 @@
       <button class="modal-close" onclick="document.getElementById('overlay-update').classList.remove('active')">&times;</button>
     </div>
     <div class="modal-body">
-      <p style="font-size:.84rem;color:var(--muted);margin-bottom:12px">
+      <p class="hint-p">
         Récupère la dernière version depuis GitHub et redémarre le service.
       </p>
       <div class="log-box" id="update-log">
-        <div class="log-line" style="color:var(--muted)">Cliquer sur « Lancer » pour démarrer…</div>
+        <div class="log-line text-muted">Cliquer sur « Lancer » pour démarrer…</div>
       </div>
     </div>
     <div class="modal-footer">
@@ -716,18 +796,18 @@
 <div class="modal-overlay" id="overlay-purge">
   <div class="modal modal-sm">
     <div class="modal-header">
-      <h3><i class="bi bi-trash3" style="color:var(--red)"></i> Purge des données</h3>
+      <h3><i class="bi bi-trash3 text-danger"></i> Purge des données</h3>
       <button class="modal-close" onclick="closePurge()">&times;</button>
     </div>
     <div class="modal-body">
-      <p style="font-size:.84rem;margin-bottom:8px">
+      <p class="text-sm mb-8">
         Supprime <strong>tous les fichiers indexés</strong> et l'historique des scans.
       </p>
-      <p style="font-size:.82rem;color:var(--red)">
+      <p class="text-sm text-danger">
         <i class="bi bi-exclamation-triangle"></i>
         Action irréversible — à utiliser en développement uniquement.
       </p>
-      <div id="purge-result" style="margin-top:10px"></div>
+      <div id="purge-result" class="mt-10"></div>
     </div>
     <div class="modal-footer">
       <button class="btn" onclick="closePurge()">Annuler</button>
@@ -740,12 +820,12 @@
 
 <!-- ══ MODAL : Nouvelle catégorie ══════════════════════════════════════════ -->
 <div class="modal-overlay" id="overlay-new-category">
-  <div class="modal" style="max-width:520px">
+  <div class="modal modal-narrow">
     <div class="modal-header">
       <h3>Nouvelle catégorie</h3>
       <button class="modal-close" onclick="Mounts.closeCategoryModal()">&times;</button>
     </div>
-    <div class="modal-body" style="max-height:72vh;overflow-y:auto">
+    <div class="modal-body modal-body-scroll">
 
       <!-- Nom -->
       <div class="form-group">
@@ -776,8 +856,8 @@
       <!-- Template -->
       <div class="form-group">
         <label class="form-label">Template de nommage <span class="req">*</span></label>
-        <div style="display:flex;gap:8px;align-items:center">
-          <select id="newcat-template" style="flex:1" onchange="Mounts.newcatSelTpl()"></select>
+        <div class="flex-row">
+          <select id="newcat-template" class="flex-1" onchange="Mounts.newcatSelTpl()"></select>
           <button class="btn btn-sm" id="newcat-btn-plus"
                   onclick="Mounts.newcatToggleForm()" title="Créer un template">
             <i class="bi bi-plus-lg"></i>
@@ -785,61 +865,56 @@
         </div>
 
         <!-- Lecture seule -->
-        <div id="newcat-tpl-readonly" style="margin-top:6px;padding:6px 10px;
-             background:var(--card-bg);border-radius:6px;font-size:.78rem;color:var(--muted)">
+        <div id="newcat-tpl-readonly" class="tpl-readonly">
           <i class="bi bi-lock"></i> Template système — lecture seule.
           Cliquez sur <strong>+</strong> pour créer le vôtre.
         </div>
 
         <!-- Sous-formulaire nouveau template -->
-        <div id="newcat-tpl-form" style="display:none;margin-top:8px;padding:12px;
-             background:var(--card-bg);border:1px solid var(--border);border-radius:8px">
-          <div style="font-size:.75rem;font-weight:600;color:var(--muted);
-               text-transform:uppercase;letter-spacing:.04em;margin-bottom:10px">
+        <div id="newcat-tpl-form" class="tpl-form hidden">
+          <div class="tpl-form-title">
             Nouveau template
           </div>
 
           <!-- Champs saisonnables -->
           <div id="newcat-fields-seasonal">
-            <div style="font-size:.75rem;color:var(--muted);padding:4px 8px;
-                 background:var(--input-bg,rgba(255,255,255,.05));border-radius:4px;
-                 font-family:'JetBrains Mono',monospace;margin-bottom:10px">
+            <div class="tpl-hint-mono">
               {serie}{sep1}{prefS}{nn_s}{sep_se}{prefE}{nn_e}{sep2}{titre}.mkv
             </div>
 
-            <div class="form-grid" style="margin-bottom:8px">
-              <div class="form-group" style="margin:0">
-                <label class="form-label" style="font-size:.75rem">Séparateur série → numéro</label>
+            <div class="form-grid mb-8">
+              <div class="form-group m-0">
+                <label class="form-label label-sm">Séparateur série → numéro</label>
                 <input id="nt-sep1" type="text" value=" - " oninput="Mounts.newcatUpdPrev()">
               </div>
-              <div class="form-group" style="margin:0">
-                <label class="form-label" style="font-size:.75rem">Séparateur numéro → titre</label>
+              <div class="form-group m-0">
+                <label class="form-label label-sm">Séparateur numéro → titre</label>
                 <input id="nt-sep2" type="text" value=" - " oninput="Mounts.newcatUpdPrev()">
               </div>
             </div>
 
-            <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-bottom:10px">
+            <div class="tpl-grid-5">
               <div>
-                <label class="form-label" style="font-size:.72rem">Préf. saison</label>
+                <label class="form-label label-xs">Préf. saison</label>
                 <input id="nt-pref-s" type="text" placeholder="S" oninput="Mounts.newcatUpdPrev()">
               </div>
               <div>
-                <label class="form-label" style="font-size:.72rem">Chiffres S</label>
+                <label class="form-label label-xs">Chiffres S</label>
                 <select id="nt-dig-s" onchange="Mounts.newcatUpdPrev()">
                   <option value="2">2 — 01</option>
                   <option value="3">3 — 001</option>
                 </select>
               </div>
               <div>
-                <label class="form-label" style="font-size:.72rem">Sép. S×E</label>
+                <label class="form-label label-xs">Sép. S×E</label>
                 <input id="nt-sep-se" type="text" value="x" oninput="Mounts.newcatUpdPrev()">
               </div>
               <div>
-                <label class="form-label" style="font-size:.72rem">Préf. épisode</label>
+                <label class="form-label label-xs">Préf. épisode</label>
                 <input id="nt-pref-e" type="text" placeholder="E" oninput="Mounts.newcatUpdPrev()">
               </div>
               <div>
-                <label class="form-label" style="font-size:.72rem">Chiffres E</label>
+                <label class="form-label label-xs">Chiffres E</label>
                 <select id="nt-dig-e" onchange="Mounts.newcatUpdPrev()">
                   <option value="2">2 — 01</option>
                   <option value="3">3 — 001</option>
@@ -847,25 +922,25 @@
               </div>
             </div>
 
-            <div style="border-top:1px solid var(--border);padding-top:8px;margin-bottom:8px">
-              <div style="font-size:.75rem;font-weight:600;color:var(--muted);margin-bottom:6px">
+            <div class="tpl-sep">
+              <div class="tpl-sep-title">
                 Dossiers saisons
               </div>
-              <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px">
+              <div class="tpl-grid-3">
                 <div>
-                  <label class="form-label" style="font-size:.72rem">Préfixe dossier</label>
+                  <label class="form-label label-xs">Préfixe dossier</label>
                   <input id="nt-folder-pref" type="text" value="S"
                          placeholder="S, Saison…" oninput="Mounts.newcatUpdPrev()">
                 </div>
                 <div>
-                  <label class="form-label" style="font-size:.72rem">Chiffres dossier</label>
+                  <label class="form-label label-xs">Chiffres dossier</label>
                   <select id="nt-folder-dig" onchange="Mounts.newcatUpdPrev()">
                     <option value="2">2 — S01</option>
                     <option value="3">3 — S001</option>
                   </select>
                 </div>
                 <div>
-                  <label class="form-label" style="font-size:.72rem">Dossier saison 0</label>
+                  <label class="form-label label-xs">Dossier saison 0</label>
                   <input id="nt-special" type="text" value="S0"
                          oninput="Mounts.newcatUpdPrev()">
                 </div>
@@ -874,14 +949,14 @@
           </div>
 
           <!-- Champs films -->
-          <div id="newcat-fields-noseasonal" style="display:none">
-            <div class="form-grid" style="margin-bottom:8px">
-              <div class="form-group" style="margin:0">
-                <label class="form-label" style="font-size:.75rem">Séparateur titre → année</label>
+          <div id="newcat-fields-noseasonal" class="hidden">
+            <div class="form-grid mb-8">
+              <div class="form-group m-0">
+                <label class="form-label label-sm">Séparateur titre → année</label>
                 <input id="nt-sep-year" type="text" value=" " oninput="Mounts.newcatUpdPrev()">
               </div>
-              <div class="form-group" style="margin:0">
-                <label class="form-label" style="font-size:.75rem">Format année</label>
+              <div class="form-group m-0">
+                <label class="form-label label-sm">Format année</label>
                 <select id="nt-fmt-year" onchange="Mounts.newcatUpdPrev()">
                   <option value="paren">(2010)</option>
                   <option value="plain">2010</option>
@@ -889,13 +964,13 @@
                 </select>
               </div>
             </div>
-            <div class="form-group" style="margin:0">
-              <label class="form-label" style="font-size:.75rem">Nom dossier bonus</label>
+            <div class="form-group m-0">
+              <label class="form-label label-sm">Nom dossier bonus</label>
               <input id="nt-bonus" type="text" value="Bonus" oninput="Mounts.newcatUpdPrev()">
             </div>
           </div>
 
-          <div style="display:flex;justify-content:flex-end;margin-top:10px">
+          <div class="flex-end mt-10">
             <button class="btn btn-sm btn-primary" onclick="Mounts.newcatSaveTpl()">
               Enregistrer le template
             </button>
@@ -904,24 +979,20 @@
       </div>
 
       <!-- Aperçu -->
-      <div style="background:var(--card-bg);border-radius:8px;padding:12px 14px">
-        <div style="font-size:.72rem;color:var(--muted);text-transform:uppercase;
-             letter-spacing:.04em;margin-bottom:8px">Aperçu</div>
-        <div id="newcat-prev-normal" style="font-family:'JetBrains Mono',monospace;
-             font-size:.82rem;margin-bottom:4px">—</div>
+      <div class="tpl-preview">
+        <div class="tpl-preview-label">Aperçu</div>
+        <div id="newcat-prev-normal" class="tpl-preview-value">—</div>
         <div id="newcat-prev-special-row">
-          <span style="font-size:.72rem;color:var(--muted)">Saison spéciale : </span>
-          <span id="newcat-prev-special" style="font-family:'JetBrains Mono',monospace;
-               font-size:.82rem">—</span>
+          <span class="text-xs text-muted">Saison spéciale : </span>
+          <span id="newcat-prev-special" class="tpl-preview-value">—</span>
         </div>
-        <div id="newcat-prev-bonus-row" style="display:none">
-          <span style="font-size:.72rem;color:var(--muted)">Dossier bonus : </span>
-          <span id="newcat-prev-bonus" style="font-family:'JetBrains Mono',monospace;
-               font-size:.82rem">—</span>
+        <div id="newcat-prev-bonus-row" class="hidden">
+          <span class="text-xs text-muted">Dossier bonus : </span>
+          <span id="newcat-prev-bonus" class="tpl-preview-value">—</span>
         </div>
       </div>
 
-      <div id="newcat-error" class="form-error" style="display:none;margin-top:8px"></div>
+      <div id="newcat-error" class="form-error hidden mt-8"></div>
     </div>
 
     <div class="modal-footer">
@@ -937,5 +1008,6 @@
 <script src="mounts.js"></script>
 <script src="stats.js"></script>
 <script src="config.js"></script>
+<script src="perf.js"></script>
 </body>
 </html>

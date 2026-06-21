@@ -76,7 +76,7 @@ const Stats = (() => {
   function _renderKPIs(d) {
     _set('kpi-total', (d.total ?? 0).toLocaleString('fr-FR'));
 
-    const h      = d.total_hours ?? 0;
+    const h      = (d.total_seconds ?? 0) / 3600;
     const years  = Math.floor(h / 8760);
     const months = Math.floor((h % 8760) / 730);
     let hl = '';
@@ -151,7 +151,8 @@ const Stats = (() => {
 
     const titles = d.titles ?? [];
     if (!titles.length) {
-      box.innerHTML = '<span style="color:var(--muted);font-size:.83rem">Aucun titre détecté</span>';
+      box.innerHTML = '<span class="text-muted text-sm">Aucun titre détecté</span>';
+      _set('titles-count', '');
       return;
     }
 
@@ -172,15 +173,15 @@ const Stats = (() => {
         </span>
       </div>`).join('')
       + (hidden.length ? `
-        <div id="titles-more" style="display:none">
+        <div id="titles-more" class="hidden">
           ${hidden.map(t => `
             <div class="title-row">
               <span class="title-name">${_esc(t.name)}</span>
               <span class="title-count">${t.count} fichier${t.count > 1 ? 's' : ''}</span>
             </div>`).join('')}
         </div>
-        <button class="btn btn-sm" style="margin-top:8px"
-          onclick="document.getElementById('titles-more').style.display='';this.style.display='none'">
+        <button class="btn btn-sm mt-8"
+          onclick="document.getElementById('titles-more').classList.remove('hidden');this.classList.add('hidden')">
           Voir ${hidden.length} de plus…
         </button>` : '');
   }
@@ -190,7 +191,7 @@ const Stats = (() => {
     const el = document.getElementById(containerId);
     if (!el) return;
     if (!items.length) {
-      el.innerHTML = '<span style="color:var(--muted);font-size:.83rem">—</span>';
+      el.innerHTML = '<span class="text-muted text-sm">—</span>';
       return;
     }
     const total = items.reduce((a, i) => a + i.count, 0);
@@ -206,15 +207,25 @@ const Stats = (() => {
 
   /* ── Donut Chart ──────────────────────────────────────────────────────── */
   function _donut(canvasId, legendId, data) {
-    if (!data?.length) return;
     const canvas = document.getElementById(canvasId);
     if (!canvas) return;
 
     if (_charts[canvasId]) { _charts[canvasId].destroy(); delete _charts[canvasId]; }
 
+    if (!data?.length) {
+      const legendEl = document.getElementById(legendId);
+      if (legendEl) legendEl.innerHTML = '<span class="text-muted text-sm">—</span>';
+      return;
+    }
+
     const labels = data.map(d => d.label);
     const values = data.map(d => d.count);
     const total  = values.reduce((a, b) => a + b, 0);
+    if (total === 0) {
+      const legendEl = document.getElementById(legendId);
+      if (legendEl) legendEl.innerHTML = '<span class="text-muted text-sm">—</span>';
+      return;
+    }
     const colors = data.map((_, i) => PALETTE[i % PALETTE.length]);
 
     _charts[canvasId] = new Chart(canvas, {

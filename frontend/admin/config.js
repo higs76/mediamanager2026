@@ -50,8 +50,8 @@ const Config = (() => {
                 <button onclick="Config.removeExt('${_esc(e)}')" title="Supprimer">×</button>
               </span>`).join('')}
           </div>
-          <div style="display:flex;gap:8px;margin-top:10px">
-            <input id="ext-new" type="text" placeholder=".ext" style="width:120px"
+          <div class="flex-row mt-10">
+            <input id="ext-new" type="text" placeholder=".ext" class="input-sm"
                    onkeydown="if(event.key==='Enter') Config.addExt()">
             <button class="btn btn-sm btn-success" onclick="Config.addExt()">
               <i class="bi bi-plus-lg"></i> Ajouter
@@ -74,14 +74,18 @@ const Config = (() => {
           </div>`;
 
       default:
-        // Champ numérique ou texte
-        const isNum = !isNaN(parseFloat(item.value));
+        // Valeur semicolon-délimitée → liste de tags (comme video_extensions)
+        if (item.value.includes(';')) {
+          return _renderTagField(item);
+        }
+        // Number() est strict (pas de préfixe partiel comme parseFloat("4K") → 4)
+        const isNum = item.value.trim() !== '' && !isNaN(Number(item.value));
         return `
-          <div style="display:flex;gap:8px;align-items:center">
+          <div class="flex-row">
             <input id="cfg-${_esc(item.key)}"
                    type="${isNum ? 'number' : 'text'}"
                    value="${_esc(item.value)}"
-                   style="width:120px"
+                   class="input-sm"
                    onkeydown="if(event.key==='Enter') Config.saveField('${_esc(item.key)}')">
             <button class="btn btn-sm btn-primary"
                     onclick="Config.saveField('${_esc(item.key)}')">
@@ -89,6 +93,26 @@ const Config = (() => {
             </button>
           </div>`;
     }
+  }
+
+  function _renderTagField(item) {
+    const tags = item.value.split(';').filter(Boolean);
+    const key  = _esc(item.key);
+    return `
+      <div class="ext-tags" id="tags-${key}">
+        ${tags.map(t => `
+          <span class="ext-tag">
+            ${_esc(t)}
+            <button onclick="Config.removeTag('${key}', '${_esc(t)}')" title="Supprimer">×</button>
+          </span>`).join('')}
+      </div>
+      <div class="flex-row mt-10">
+        <input id="tag-new-${key}" type="text" placeholder="nouveau tag" class="input-md"
+               onkeydown="if(event.key==='Enter') Config.addTag('${key}')">
+        <button class="btn btn-sm btn-success" onclick="Config.addTag('${key}')">
+          <i class="bi bi-plus-lg"></i> Ajouter
+        </button>
+      </div>`;
   }
 
   /* ── Extensions ───────────────────────────────────────────────────────── */
@@ -116,6 +140,31 @@ const Config = (() => {
   async function removeExt(ext) {
     const exts = _getExts().filter(e => e !== ext);
     await _save('video_extensions', exts.join(';'));
+  }
+
+  /* ── Tags génériques (catalog_tech_tags et toute clé semicolon) ────────── */
+  function _getTags(key) {
+    const item = _data.find(d => d.key === key);
+    return item ? item.value.split(';').filter(Boolean) : [];
+  }
+
+  async function addTag(key) {
+    const input = document.getElementById(`tag-new-${key}`);
+    const val   = (input?.value || '').trim();
+    if (!val) return;
+    const tags = _getTags(key);
+    if (tags.includes(val)) {
+      _setStatus(key, 'warn', 'Tag déjà présent');
+      return;
+    }
+    tags.push(val);
+    await _save(key, tags.join(';'));
+    if (input) input.value = '';
+  }
+
+  async function removeTag(key, tag) {
+    const tags = _getTags(key).filter(t => t !== tag);
+    await _save(key, tags.join(';'));
   }
 
   /* ── Toggle ───────────────────────────────────────────────────────────── */
@@ -172,6 +221,6 @@ const Config = (() => {
       .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
-  return { load, addExt, removeExt, saveToggle, saveField };
+  return { load, addExt, removeExt, saveToggle, saveField, addTag, removeTag };
 
 })();

@@ -76,7 +76,7 @@ const Mounts = (() => {
           <i class="bi bi-chevron-down collapse-icon"></i>
         </div>
         <div class="collapsible-body">
-          <div class="form-group" style="margin-top:8px">
+          <div class="form-group mt-8">
             <label class="form-label">Options de montage</label>
             <input id="f-options" type="text"
                    value="uid=1000,gid=1000,file_mode=0644,dir_mode=0755,iocharset=utf8">
@@ -115,7 +115,7 @@ const Mounts = (() => {
           <i class="bi bi-chevron-down collapse-icon"></i>
         </div>
         <div class="collapsible-body">
-          <div class="form-group" style="margin-top:8px">
+          <div class="form-group mt-8">
             <label class="form-label">Options de montage</label>
             <input id="f-options" type="text" value="rw,soft,timeo=30">
           </div>
@@ -228,7 +228,7 @@ const Mounts = (() => {
 
     if (!filtered.length) {
       tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state">
-        <i class="bi bi-hdd-x" style="font-size:1.5rem;display:block;margin-bottom:8px"></i>
+        <i class="bi bi-hdd-x empty-state-icon"></i>
         Aucun montage${_currentCat !== 'all' ? ' pour cette catégorie' : ''}.
         Cliquer sur <strong>+ Ajouter</strong> pour commencer.
       </div></td></tr>`;
@@ -243,7 +243,7 @@ const Mounts = (() => {
         <td class="td-name">${m.id} - ${_esc(m.category_name)}</td>
         <td><span class="badge badge-blue">${_esc(m.category_name)}</span></td>
         <td><span class="badge badge-muted">${(m.mount_type || 'smb').toUpperCase()}</span></td>
-        <td style="font-family:'JetBrains Mono',monospace;font-size:.82rem">${source}</td>
+        <td class="td-path">${source}</td>
         <td class="td-mono" title="${_esc(m.local_path)}">
           …/${_esc(m.local_path.split('/MediaManagerMnt/').pop() ?? m.local_path)}
         </td>
@@ -309,8 +309,8 @@ const Mounts = (() => {
     _wizardType = type;
     document.getElementById('wtype-smb')?.classList.toggle('active', type === 'smb');
     document.getElementById('wtype-nfs')?.classList.toggle('active', type === 'nfs');
-    document.getElementById('wfields-smb').style.display = type === 'smb' ? '' : 'none';
-    document.getElementById('wfields-nfs').style.display = type === 'nfs' ? '' : 'none';
+    document.getElementById('wfields-smb').classList.toggle('hidden', type !== 'smb');
+    document.getElementById('wfields-nfs').classList.toggle('hidden', type !== 'nfs');
   }
 
   function _wizardGoToStep(step) {
@@ -328,7 +328,7 @@ const Mounts = (() => {
     // Boutons footer
     const btnPrev = document.getElementById('btn-wizard-prev');
     const btnNext = document.getElementById('btn-wizard-next');
-    if (btnPrev) btnPrev.style.display = step > 1 ? '' : 'none';
+    if (btnPrev) btnPrev.classList.toggle('hidden', step <= 1);
     if (btnNext) {
       if (step === 3) {
         btnNext.innerHTML = '<i class="bi bi-check2"></i> Ajouter les montages';
@@ -340,17 +340,17 @@ const Mounts = (() => {
     }
     // Cacher erreur générale
     const errEl = document.getElementById('modal-mount-error');
-    if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+    if (errEl) { errEl.classList.add('hidden'); errEl.textContent = ''; }
   }
 
   function _wizardShowError(step, msg) {
     const el = document.getElementById(`wizard-step${step}-error`);
-    if (el) { el.textContent = msg; el.style.display = 'block'; }
+    if (el) { el.textContent = msg; el.classList.remove('hidden'); }
   }
 
   function _wizardClearError(step) {
     const el = document.getElementById(`wizard-step${step}-error`);
-    if (el) { el.style.display = 'none'; el.textContent = ''; }
+    if (el) { el.classList.add('hidden'); el.textContent = ''; }
   }
 
   async function wizardNext() {
@@ -409,7 +409,7 @@ const Mounts = (() => {
     }
 
     if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Scan…'; }
-    grid.innerHTML = '<div style="color:var(--muted);font-size:.84rem;padding:16px 0;text-align:center"><span class="spinner"></span> Recherche des partages…</div>';
+    grid.innerHTML = '<div class="wizard-shares-msg"><span class="spinner"></span> Recherche des partages…</div>';
 
     const user = _getVal('w-username') || null;
     const pwd  = _getVal('w-password') || null;
@@ -422,12 +422,12 @@ const Mounts = (() => {
       const d = await r.json();
 
       if (d.error && !d.shares?.length) {
-        grid.innerHTML = `<div style="color:var(--red);font-size:.84rem;padding:12px 0">
+        grid.innerHTML = `<div class="wizard-shares-msg error">
           <i class="bi bi-exclamation-triangle"></i> ${_esc(d.error)}</div>`;
         return;
       }
       if (!d.shares?.length) {
-        grid.innerHTML = '<div style="color:var(--muted);font-size:.84rem;padding:12px 0">Aucun partage trouvé</div>';
+        grid.innerHTML = '<div class="wizard-shares-msg ok">Aucun partage trouvé</div>';
         return;
       }
 
@@ -435,7 +435,7 @@ const Mounts = (() => {
       _wizardRenderSharesGrid();
 
     } catch (e) {
-      grid.innerHTML = `<div style="color:var(--red);font-size:.84rem;padding:12px 0">
+      grid.innerHTML = `<div class="wizard-shares-msg error">
         <i class="bi bi-wifi-off"></i> ${_esc(e.message)}</div>`;
     } finally {
       if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-search"></i> Scanner les partages'; }
@@ -471,12 +471,12 @@ const Mounts = (() => {
           <input type="checkbox" id="share-cb-${i}"
                  ${disabled ? 'disabled checked' : ''}
                  onchange="Mounts._wizardToggleShare(${i})">
-          <label for="share-cb-${i}" style="cursor:pointer;font-family:'JetBrains Mono',monospace;font-size:.82rem">
+          <label for="share-cb-${i}" class="share-label">
             ${_esc(share)}
-            ${disabled ? '<span style="color:var(--muted);font-size:.75rem;margin-left:6px">déjà configuré</span>' : ''}
+            ${disabled ? '<span class="share-already">déjà configuré</span>' : ''}
           </label>
           <select id="share-cat-${i}" ${disabled ? 'disabled' : ''}
-                  style="font-size:.82rem"
+                  class="share-select"
                   onchange="Mounts._wizardCatChange(${i})">
             ${catOptions}
           </select>
@@ -519,7 +519,7 @@ const Mounts = (() => {
 
     div.innerHTML = _wizardSelected.map(s => `
       <div class="summary-row">
-        <i class="bi bi-folder2" style="color:var(--blue)"></i>
+        <i class="bi bi-folder2 text-blue"></i>
         <span class="summary-share">${_esc(server)}${_esc(s.share)}</span>
         <span class="summary-arrow">→</span>
         <span class="summary-cat"><i class="bi bi-collection"></i> ${_cap(_esc(s.category_name))}</span>
@@ -565,7 +565,7 @@ const Mounts = (() => {
         const errEl = document.getElementById('modal-mount-error');
         if (errEl) {
           errEl.textContent = d.detail ?? JSON.stringify(d);
-          errEl.style.display = 'block';
+          errEl.classList.add('visible');
         }
         return;
       }
@@ -585,7 +585,7 @@ const Mounts = (() => {
 
     } catch (e) {
       const errEl = document.getElementById('modal-mount-error');
-      if (errEl) { errEl.textContent = e.message; errEl.style.display = 'block'; }
+      if (errEl) { errEl.textContent = e.message; errEl.classList.add('visible'); }
     } finally {
       if (btnNext) { btnNext.disabled = false; btnNext.innerHTML = '<i class="bi bi-check2"></i> Ajouter les montages'; }
     }
@@ -626,15 +626,15 @@ const Mounts = (() => {
     _renderCategorySelect();
     // Bloquer le changement de type en édition
     document.querySelectorAll('#overlay-edit-mount .type-card').forEach(c => {
-      c.style.opacity       = c.dataset.type === _selType ? '1' : '0.3';
-      c.style.pointerEvents = 'none';
+      c.classList.add('type-locked');
+      c.classList.toggle('type-dim', c.dataset.type !== _selType);
     });
     _openOverlay('overlay-edit-mount');
   }
 
   function _resetEditForm() {
     const errEl = document.getElementById('modal-edit-error');
-    if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+    if (errEl) { errEl.classList.remove('visible'); errEl.textContent = ''; }
     const active = document.getElementById('f-active');
     if (active) active.checked = true;
     _setVal('f-cat-select', '');
@@ -642,9 +642,7 @@ const Mounts = (() => {
     const tf = document.getElementById('type-fields');
     if (tf) { tf.innerHTML = ''; tf.classList.remove('show'); }
     document.querySelectorAll('#overlay-edit-mount .type-card').forEach(c => {
-      c.classList.remove('selected');
-      c.style.opacity = '1';
-      c.style.pointerEvents = '';
+      c.classList.remove('selected', 'type-locked', 'type-dim');
     });
   }
 
@@ -734,7 +732,7 @@ const Mounts = (() => {
         let msg = e.message;
         try { msg = JSON.parse(e.message); } catch (_) {}
         errEl.textContent = typeof msg === 'string' ? msg : JSON.stringify(msg);
-        errEl.style.display = 'block';
+        errEl.classList.add('visible');
       } else {
         alert('Erreur : ' + e.message);
       }
@@ -881,9 +879,9 @@ const Mounts = (() => {
     if (!el) return;
     const cls = type === 'ok' ? '' : type === 'error' ? 'error' : 'warn';
     el.className = `alert ${cls}`;
-    el.style.display = 'flex';
+    el.classList.remove('hidden');
     el.innerHTML = `<div><strong>${title}</strong>${detail
-      ? `<br><span style="font-size:.82rem;opacity:.8">${_esc(detail)}</span>`
+      ? `<br><span class="banner-detail">${_esc(detail)}</span>`
       : ''}</div>`;
   }
 
@@ -912,9 +910,9 @@ const Mounts = (() => {
     _newcatType = 'seasonal';
     _setVal('newcat-name', '');
     const errEl = document.getElementById('newcat-error');
-    if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
-    document.getElementById('newcat-tpl-form').style.display    = 'none';
-    document.getElementById('newcat-tpl-readonly').style.display = '';
+    if (errEl) { errEl.classList.add('hidden'); errEl.textContent = ''; }
+    document.getElementById('newcat-tpl-form').classList.add('hidden');
+    document.getElementById('newcat-tpl-readonly').classList.remove('hidden');
 
     try {
       const r = await fetch(`${API}/api/admin/naming-templates`);
@@ -936,14 +934,10 @@ const Mounts = (() => {
       ?.classList.toggle('active', type === 'seasonal');
     document.getElementById('newcat-type-noseasonal')
       ?.classList.toggle('active', type === 'noseasonal');
-    document.getElementById('newcat-fields-seasonal').style.display =
-      type === 'seasonal' ? '' : 'none';
-    document.getElementById('newcat-fields-noseasonal').style.display =
-      type === 'noseasonal' ? '' : 'none';
-    document.getElementById('newcat-prev-special-row').style.display =
-      type === 'seasonal' ? '' : 'none';
-    document.getElementById('newcat-prev-bonus-row').style.display =
-      type === 'noseasonal' ? '' : 'none';
+    document.getElementById('newcat-fields-seasonal').classList.toggle('hidden', type !== 'seasonal');
+    document.getElementById('newcat-fields-noseasonal').classList.toggle('hidden', type !== 'noseasonal');
+    document.getElementById('newcat-prev-special-row').classList.toggle('hidden', type !== 'seasonal');
+    document.getElementById('newcat-prev-bonus-row').classList.toggle('hidden', type !== 'noseasonal');
     _newcatRebuildSelect();
   }
 
@@ -970,8 +964,8 @@ const Mounts = (() => {
     if (!sel) return;
     const tpl = _newcatTemplates.find(t => t.id === parseInt(sel.value));
     const isDefault = tpl?.is_default ?? true;
-    document.getElementById('newcat-tpl-readonly').style.display = isDefault ? '' : 'none';
-    if (isDefault) document.getElementById('newcat-tpl-form').style.display = 'none';
+    document.getElementById('newcat-tpl-readonly').classList.toggle('hidden', !isDefault);
+    if (isDefault) document.getElementById('newcat-tpl-form').classList.add('hidden');
     // Mettre à jour l'aperçu depuis le template sélectionné
     if (tpl) _newcatPreviewFromTpl(tpl);
   }
@@ -979,9 +973,9 @@ const Mounts = (() => {
   function newcatToggleForm() {
     const form = document.getElementById('newcat-tpl-form');
     const ro   = document.getElementById('newcat-tpl-readonly');
-    const showing = form.style.display !== 'none';
-    form.style.display = showing ? 'none' : '';
-    ro.style.display   = showing ? '' : 'none';
+    const showing = !form.classList.contains('hidden');
+    form.classList.toggle('hidden', showing);
+    ro.classList.toggle('hidden', !showing);
     if (!showing) newcatUpdPrev();
   }
 
@@ -1077,21 +1071,21 @@ const Mounts = (() => {
       // Sélectionner le nouveau template
       document.getElementById('newcat-template').value = d.id;
       newcatSelTpl();
-      document.getElementById('newcat-tpl-form').style.display = 'none';
+      document.getElementById('newcat-tpl-form').classList.add('hidden');
 
     } catch(e) {
       const errEl = document.getElementById('newcat-error');
-      if (errEl) { errEl.textContent = e.message; errEl.style.display = 'block'; }
+      if (errEl) { errEl.textContent = e.message; errEl.classList.remove('hidden'); }
     }
   }
 
   async function saveNewCategory() {
     const name  = (_getVal('newcat-name') || '').trim().toLowerCase();
     const errEl = document.getElementById('newcat-error');
-    if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+    if (errEl) { errEl.classList.add('hidden'); errEl.textContent = ''; }
 
     if (!name) {
-      if (errEl) { errEl.textContent = 'Le nom est obligatoire'; errEl.style.display = 'block'; }
+      if (errEl) { errEl.textContent = 'Le nom est obligatoire'; errEl.classList.remove('hidden'); }
       return;
     }
 
@@ -1119,7 +1113,7 @@ const Mounts = (() => {
       closeCategoryModal();
 
     } catch(e) {
-      if (errEl) { errEl.textContent = e.message; errEl.style.display = 'block'; }
+      if (errEl) { errEl.textContent = e.message; errEl.classList.remove('hidden'); }
     }
   }
 

@@ -5,9 +5,14 @@
 
 const Library = (() => {
 
-  let _categories  = [];
-  let _currentCat  = null;
+  let _categories   = [];
+  let _currentCat   = null;
   let _currentTitle = null;
+  let _offset       = 0;
+  let _limit        = 50;
+  let _total        = 0;
+  let _searchQuery  = '';
+  let _searchTimer  = null;
 
   /* ── Entrée publique ──────────────────────────────────────────────────── */
   async function init() {
@@ -43,93 +48,74 @@ const Library = (() => {
       <div class="breadcrumb">
         <i class="bi bi-house"></i> Bibliothèque
       </div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px">
+      <div class="cat-grid">
         ${visible.map(c => _categoryCardHtml(c)).join('')}
       </div>`;
   }
 
-function _categoryCardHtml(c) {
-    const tb     = c.total_tb >= 1
-      ? `${c.total_tb} To`
-      : `${Math.round(c.total_tb * 1024)} Go`;
-    const icon   = c.has_seasons ? 'bi-tv' : 'bi-film';
-    const badge  = c.has_seasons
-      ? `<span style="font-size:11px;padding:2px 8px;border-radius:20px;
-             background:rgba(88,166,255,.15);color:var(--blue);
-             border:1px solid rgba(88,166,255,.3)">Saisonnable</span>`
-      : `<span style="font-size:11px;padding:2px 8px;border-radius:20px;
-             background:var(--bg3);color:var(--muted);
-             border:1px solid var(--border)">Film</span>`;
+  function _categoryCardHtml(c) {
+    const tb    = c.total_tb >= 1 ? `${c.total_tb} To` : `${Math.round(c.total_tb * 1024)} Go`;
+    const icon  = c.has_seasons ? 'bi-tv' : 'bi-film';
+    const badge = c.has_seasons
+      ? `<span class="cat-badge cat-badge-seasonal">Saisonnable</span>`
+      : `<span class="cat-badge cat-badge-film">Film</span>`;
 
     const resHtml = c.resolutions.map(r => `
-      <div style="display:flex;align-items:center;justify-content:space-between;font-size:12px;margin-bottom:3px">
-        <span style="color:var(--muted)">${esc(r.label)}</span>
-        <span style="font-weight:500">${r.pct}%</span>
+      <div class="prog-row">
+        <span class="text-muted">${esc(r.label)}</span>
+        <span class="fw-500">${r.pct}%</span>
       </div>
-      <div style="height:3px;background:var(--bg3);border-radius:2px;margin-bottom:5px">
-        <div style="width:${r.pct}%;height:100%;background:var(--blue);border-radius:2px"></div>
-      </div>`).join('');
+      <div class="prog-track"><div class="prog-fill prog-fill-blue" style="width:${r.pct}%"></div></div>
+    `).join('');
 
     const codHtml = c.codecs.map(r => `
-      <div style="display:flex;align-items:center;justify-content:space-between;font-size:12px;margin-bottom:3px">
-        <span style="color:var(--muted)">${esc(r.label)}</span>
-        <span style="font-weight:500">${r.pct}%</span>
+      <div class="prog-row">
+        <span class="text-muted">${esc(r.label)}</span>
+        <span class="fw-500">${r.pct}%</span>
       </div>
-      <div style="height:3px;background:var(--bg3);border-radius:2px;margin-bottom:5px">
-        <div style="width:${r.pct}%;height:100%;background:var(--purple);border-radius:2px"></div>
-      </div>`).join('');
+      <div class="prog-track"><div class="prog-fill prog-fill-purple" style="width:${r.pct}%"></div></div>
+    `).join('');
 
     return `
-      <div style="background:var(--card-bg);border:1px solid var(--border);
-           border-radius:var(--radius-lg);overflow:hidden;cursor:pointer;
-           transition:border-color .15s"
-           onclick="Library.openCategory(${c.id})"
-           onmouseover="this.style.borderColor='var(--blue)'"
-           onmouseout="this.style.borderColor='var(--border)'">
+      <div class="cat-card" onclick="Library.openCategory(${c.id})">
 
-        <!-- En-tête -->
-        <div style="display:flex;align-items:center;justify-content:space-between;
-             padding:12px 14px;border-bottom:1px solid var(--border)">
-          <div style="display:flex;align-items:center;gap:8px">
-            <i class="bi ${icon}" style="font-size:18px;color:var(--blue)"></i>
-            <span style="font-weight:600;font-size:14px">${esc(cap(c.name))}</span>
+        <div class="cat-card-head">
+          <div class="cat-card-brand">
+            <i class="bi ${icon} cat-card-icon"></i>
+            <span class="cat-card-name">${esc(cap(c.name))}</span>
           </div>
           ${badge}
         </div>
 
-        <!-- Titres / Fichiers / Taille -->
-        <div style="padding:12px 14px;border-bottom:1px solid var(--border)">
-          <div style="display:flex;align-items:center;justify-content:space-between">
-            <div style="display:flex;flex-direction:column;gap:5px">
-              <div style="display:flex;align-items:center;gap:6px;font-size:13px">
-                <i class="bi bi-collection-play" style="color:var(--muted);font-size:14px"></i>
+        <div class="cat-card-body">
+          <div class="cat-card-counts">
+            <div class="cat-card-count-list">
+              <div class="cat-card-count-row">
+                <i class="bi bi-collection-play cat-count-icon"></i>
                 <strong>${c.title_count.toLocaleString('fr-FR')}</strong>
-                <span style="color:var(--muted)">titres</span>
+                <span class="text-muted">titres</span>
               </div>
-              <div style="display:flex;align-items:center;gap:6px;font-size:13px">
-                <i class="bi bi-files" style="color:var(--muted);font-size:14px"></i>
+              <div class="cat-card-count-row">
+                <i class="bi bi-files cat-count-icon"></i>
                 <strong>${c.file_count.toLocaleString('fr-FR')}</strong>
-                <span style="color:var(--muted)">fichiers</span>
+                <span class="text-muted">fichiers</span>
               </div>
             </div>
-            <div style="text-align:right">
-              <i class="bi bi-database" style="font-size:18px;color:var(--muted);display:block;margin-bottom:2px"></i>
-              <span style="font-size:18px;font-weight:600">${tb}</span>
+            <div class="cat-card-size">
+              <i class="bi bi-database cat-card-size-icon"></i>
+              <span class="cat-card-size-val">${tb}</span>
             </div>
           </div>
         </div>
 
-        <!-- Résolutions + Codecs -->
-        <div style="display:grid;grid-template-columns:1fr 1fr;padding:10px 14px;gap:14px">
+        <div class="cat-card-stats">
           <div>
-            <div style="font-size:10px;color:var(--muted);text-transform:uppercase;
-                 letter-spacing:.04em;margin-bottom:7px">Résolutions</div>
-            ${resHtml || '<span style="font-size:11px;color:var(--muted)">—</span>'}
+            <div class="cat-stat-label">Résolutions</div>
+            ${resHtml || '<span class="stat-blank">—</span>'}
           </div>
           <div>
-            <div style="font-size:10px;color:var(--muted);text-transform:uppercase;
-                 letter-spacing:.04em;margin-bottom:7px">Codecs</div>
-            ${codHtml || '<span style="font-size:11px;color:var(--muted)">—</span>'}
+            <div class="cat-stat-label">Codecs</div>
+            ${codHtml || '<span class="stat-blank">—</span>'}
           </div>
         </div>
 
@@ -139,18 +125,89 @@ function _categoryCardHtml(c) {
 
   /* ── Titres ───────────────────────────────────────────────────────────── */
   async function openCategory(catId) {
-    _currentCat = _categories.find(c => c.id === catId);
-    const el = document.getElementById('library-content');
-    el.innerHTML = `<div class="empty-state"><span class="spinner"></span></div>`;
+    _currentCat  = _categories.find(c => c.id === catId);
+    _offset      = 0;
+    _searchQuery = '';
+    await _fetchTitles(true);
+  }
+
+  async function _fetchTitles(fullRender = false) {
+    const catId = _currentCat?.id;
+    if (!catId) return;
+
+    let url = `${API}/api/admin/library/titles?category_id=${catId}&limit=${_limit}&offset=${_offset}`;
+    if (_searchQuery) url += `&search=${encodeURIComponent(_searchQuery)}`;
+
+    if (fullRender) {
+      document.getElementById('library-content').innerHTML =
+        `<div class="empty-state"><span class="spinner"></span></div>`;
+    } else {
+      const list = document.getElementById('titles-list');
+      if (list) list.innerHTML = `<div class="empty-state"><span class="spinner"></span></div>`;
+    }
 
     try {
-      const r = await fetch(`${API}/api/admin/library/titles?category_id=${catId}`);
-      const titles = await r.json();
-      _renderTitles(titles);
+      const r    = await fetch(url);
+      const data = await r.json();
+      _total = data.total;
+      if (fullRender) {
+        _renderTitles(data.items);
+      } else {
+        _updateTitlesArea(data.items);
+      }
     } catch(e) {
-      el.innerHTML = `<div class="empty-state">
-        <i class="bi bi-wifi-off"></i> Erreur de chargement</div>`;
+      document.getElementById('library-content').innerHTML =
+        `<div class="empty-state"><i class="bi bi-wifi-off"></i> Erreur de chargement</div>`;
     }
+  }
+
+  function _updateTitlesArea(items) {
+    const countEl = document.getElementById('lib-count');
+    if (countEl) countEl.textContent = _countLabel();
+    const pagEl = document.getElementById('lib-pagination');
+    if (pagEl) pagEl.innerHTML = _paginationHtml();
+    const list = document.getElementById('titles-list');
+    if (list) list.innerHTML = _titlesHtml(items);
+  }
+
+  function _countLabel() {
+    if (!_total) return 'Aucun résultat';
+    const from = _offset + 1;
+    const to   = Math.min(_offset + _limit, _total);
+    return `${from} – ${to} sur ${_total}`;
+  }
+
+  function _paginationHtml() {
+    const pages   = Math.ceil(_total / _limit);
+    const current = Math.floor(_offset / _limit) + 1;
+    const prevOk  = _offset > 0;
+    const nextOk  = _offset + _limit < _total;
+    const limitSel = [25, 50, 100, 150, 200].map(n =>
+      `<option value="${n}"${n === _limit ? ' selected' : ''}>${n}</option>`
+    ).join('');
+
+    return `
+      ${pages > 1 ? `
+        <button class="btn btn-sm" ${prevOk ? '' : 'disabled'} onclick="Library.changePage(-1)">
+          <i class="bi bi-chevron-left"></i>
+        </button>
+        <span class="lib-page-info">${current} / ${pages}</span>
+        <button class="btn btn-sm" ${nextOk ? '' : 'disabled'} onclick="Library.changePage(1)">
+          <i class="bi bi-chevron-right"></i>
+        </button>` : ''}
+      <select class="lib-limit-sel" onchange="Library.changeLimit(+this.value)">${limitSel}</select>`;
+  }
+
+  function changePage(dir) {
+    _offset = Math.max(0, Math.min(_offset + dir * _limit, (_total - 1)));
+    _offset = Math.floor(_offset / _limit) * _limit;
+    _fetchTitles(true);
+  }
+
+  function changeLimit(n) {
+    _limit  = n;
+    _offset = 0;
+    _fetchTitles(true);
   }
 
   function _statBars(items, cls) {
@@ -159,13 +216,13 @@ function _categoryCardHtml(c) {
         <span class="stat-bar-label">${esc(r.label.toUpperCase())}</span>
         <div class="stat-bar-bg"><div class="stat-bar-fill ${cls}" style="width:${r.pct}%"></div></div>
         <span class="stat-bar-val">${r.pct}%</span>
-      </div>`).join('') || '<span style="font-size:11px;color:var(--muted)">—</span>';
+      </div>`).join('') || '<span class="stat-blank">—</span>';
   }
 
   function _watchProgress(pct) {
     const opacity = Math.max(0.25, pct / 100);
     return `<div class="watch-progress">
-      <i class="bi bi-eye" style="font-size:11px;color:var(--muted)"></i>
+      <i class="bi bi-eye"></i>
       <div class="watch-progress-bg">
         <div class="watch-progress-fill" style="width:${pct}%;opacity:${opacity}"></div>
       </div>
@@ -173,7 +230,7 @@ function _categoryCardHtml(c) {
     </div>`;
   }
 
-function _renderTitle(t) {
+  function _renderTitle(t) {
     const el  = document.getElementById('library-content');
     const cat = _currentCat;
 
@@ -182,7 +239,7 @@ function _renderTitle(t) {
       : `${t.size_gb} Go`;
 
     const propBadge = (t.proposals_total > 0) ? `
-      <span class="badge badge-warn" style="display:inline-block;margin-bottom:6px">
+      <span class="badge badge-warn badge-block-b">
         ${t.proposals_total} proposition${t.proposals_total > 1 ? 's' : ''}
       </span>` : '';
 
@@ -195,37 +252,37 @@ function _renderTitle(t) {
         <span>${esc(t.display_name)}</span>
       </div>
 
-      <div class="card" style="margin-bottom:16px">
-        <div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px">
-          <div style="flex:0 0 220px;min-width:0">
-            <div style="font-size:18px;font-weight:600;margin-bottom:4px">
+      <div class="card card-mb">
+        <div class="title-card-inner">
+          <div class="title-info-col">
+            <div class="title-heading-lg">
               ${esc(t.display_name)}
-              ${t.year ? `<span style="color:var(--muted);font-size:14px;font-weight:400">(${t.year})</span>` : ''}
+              ${t.year ? `<span class="title-year">(${t.year})</span>` : ''}
             </div>
             ${propBadge}
-            <div style="font-size:12px;color:var(--muted)">
+            <div class="title-meta">
               ${t.has_seasons ? `${Object.keys(t.seasons).length} saison${Object.keys(t.seasons).length > 1 ? 's' : ''} · ` : ''}
               ${t.file_count} fichier${t.file_count > 1 ? 's' : ''}
             </div>
             ${_watchProgress(t.watched_pct)}
             ${t.folder_status === 'to_rename' ? `
-              <span class="badge badge-warn" style="margin-top:6px;display:inline-block">
+              <span class="badge badge-warn badge-block-t">
                 <i class="bi bi-folder"></i> Dossier à renommer
               </span>` : ''}
           </div>
 
-          <div style="flex:1;min-width:160px">
+          <div class="title-stat-col">
             <div class="stat-block-label">Résolutions</div>
             ${_statBars(t.resolutions, 'res')}
           </div>
 
-          <div style="flex:1;min-width:160px">
+          <div class="title-stat-col">
             <div class="stat-block-label">Codecs</div>
             ${_statBars(t.codecs, 'codec')}
           </div>
 
           <div class="weight-pill">
-            <i class="bi bi-database-fill" style="color:var(--blue)"></i>
+            <i class="bi bi-database-fill"></i>
             ${sizeLabel}
           </div>
         </div>
@@ -245,10 +302,12 @@ function _renderTitle(t) {
         <span>${esc(cap(cat?.name ?? ''))}</span>
       </div>
 
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
+      <div class="lib-toolbar">
         <input type="text" id="lib-search" placeholder="Rechercher…"
-               style="max-width:280px" oninput="Library.search(this.value, ${cat?.id})">
-        <span style="font-size:12px;color:var(--muted)">${titles.length} titre${titles.length > 1 ? 's' : ''}</span>
+               value="${esc(_searchQuery)}"
+               oninput="Library.search(this.value)">
+        <span id="lib-count" class="lib-count">${_countLabel()}</span>
+        <div id="lib-pagination" class="lib-pagination">${_paginationHtml()}</div>
       </div>
 
       <div id="titles-list">
@@ -260,10 +319,10 @@ function _renderTitle(t) {
     if (!titles.length) {
       return `<div class="empty-state"><i class="bi bi-search"></i> Aucun résultat</div>`;
     }
-    return `<div class="card" style="padding:0">
+    return `<div class="card card-flush">
       ${titles.map(t => {
         const propBadge = t.proposals > 0
-          ? `<span class="badge badge-warn" style="display:inline-block;margin-bottom:6px">
+          ? `<span class="badge badge-warn badge-block-b">
                ${t.proposals} proposition${t.proposals > 1 ? 's' : ''}
              </span>`
           : '';
@@ -278,77 +337,55 @@ function _renderTitle(t) {
           `${t.file_count} fichier${t.file_count > 1 ? 's' : ''}`,
         ].filter(Boolean).join(' · ');
 
-        // Barre de complétion (vu) — opacité proportionnelle au %
         const wp = t.watched_pct || 0;
         const opacity = Math.max(0.25, wp / 100);
         const watchedBlock = t.file_count > 0 ? `
-          <div style="margin-top:8px">
-            <div style="font-size:10px;color:var(--muted);text-transform:uppercase;
-                 letter-spacing:.04em;margin-bottom:4px">
-              <i class="bi bi-eye"></i> Complétion : ${wp}%
-            </div>
-            <div style="height:5px;background:var(--bg3);border-radius:3px;width:160px">
-              <div style="width:${wp}%;height:100%;background:var(--green);
-                   opacity:${opacity};border-radius:3px"></div>
+          <div class="watched-block">
+            <div class="watched-label"><i class="bi bi-eye"></i> Complétion : ${wp}%</div>
+            <div class="watched-bar">
+              <div class="watched-fill" style="width:${wp}%;opacity:${opacity}"></div>
             </div>
           </div>` : '';
 
         const resBars = (t.resolutions || []).map(r => `
-          <div style="display:grid;grid-template-columns:42px 1fr 32px;
-               gap:8px;align-items:center;margin-bottom:3px">
-            <span style="font-size:11px;color:var(--muted)">${esc(r.label)}</span>
-            <div style="height:4px;background:var(--bg3);border-radius:2px">
-              <div style="width:${r.pct}%;height:100%;background:var(--blue);border-radius:2px"></div>
-            </div>
-            <span style="font-size:11px;color:var(--muted);text-align:right">${r.pct}%</span>
+          <div class="mini-bar-row">
+            <span class="mini-bar-label">${esc(r.label)}</span>
+            <div class="mini-bar-bg"><div class="mini-bar-fill res" style="width:${r.pct}%"></div></div>
+            <span class="mini-bar-val">${r.pct}%</span>
           </div>`).join('');
 
         const codBars = (t.codecs || []).map(r => `
-          <div style="display:grid;grid-template-columns:50px 1fr 32px;
-               gap:8px;align-items:center;margin-bottom:3px">
-            <span style="font-size:11px;color:var(--muted)">${esc(r.label)}</span>
-            <div style="height:4px;background:var(--bg3);border-radius:2px">
-              <div style="width:${r.pct}%;height:100%;background:var(--purple);border-radius:2px"></div>
-            </div>
-            <span style="font-size:11px;color:var(--muted);text-align:right">${r.pct}%</span>
+          <div class="mini-bar-row codec">
+            <span class="mini-bar-label">${esc(r.label)}</span>
+            <div class="mini-bar-bg"><div class="mini-bar-fill codec" style="width:${r.pct}%"></div></div>
+            <span class="mini-bar-val">${r.pct}%</span>
           </div>`).join('');
 
-        return `<div class="title-row" onclick="Library.openTitle(${t.id})"
-                     style="align-items: center;padding:14px 16px">
+        return `<div class="title-row title-row-list" onclick="Library.openTitle(${t.id})">
 
-          <!-- Gauche : titre + propositions + meta + complétion -->
-          <div style="flex:0 0 220px;align-self: flex-start;min-width:0">
-            <div class="title-name" style="font-size:15px;margin-bottom:4px">
-              ${esc(t.display_name)}
-            </div>
+          <div class="title-info-col">
+            <div class="title-heading-md">${esc(t.display_name)}</div>
             ${propBadge}
             <div class="title-meta">${esc(meta)}</div>
             ${watchedBlock}
           </div>
 
-          <!-- Milieu : résolutions -->
-          <div style="flex:1;align-self: flex-start;min-width:160px;padding:0 16px">
-            <div style="font-size:10px;color:var(--muted);text-transform:uppercase;
-                 letter-spacing:.04em;margin-bottom:6px">Résolutions</div>
-            ${resBars || '<span style="font-size:11px;color:var(--muted)">—</span>'}
+          <div class="title-stat-col title-stat-col-padded">
+            <div class="stat-block-label">Résolutions</div>
+            ${resBars || '<span class="stat-blank">—</span>'}
           </div>
 
-          <!-- Milieu : codecs -->
-          <div style="flex:1;align-self: flex-start;min-width:160px;padding:0 16px">
-            <div style="font-size:10px;color:var(--muted);text-transform:uppercase;
-                 letter-spacing:.04em;margin-bottom:6px">Codecs</div>
-            ${codBars || '<span style="font-size:11px;color:var(--muted)">—</span>'}
+          <div class="title-stat-col title-stat-col-padded">
+            <div class="stat-block-label">Codecs</div>
+            ${codBars || '<span class="stat-blank">—</span>'}
           </div>
 
-          <!-- Droite : poids + chevron -->
-          <div style="display:flex;align-items:center;gap:10px;flex-shrink:0;padding-top:2px">
-            <div style="display:flex;align-items:center;gap:6px;padding:6px 12px;
-                 background:var(--bg3);border-radius:8px;font-size:13px;font-weight:600"
-                 title="Taille totale sur le disque">
-              <i class="bi bi-database-fill" style="color:var(--blue)"></i>
+          <div class="title-right-col">
+            <div class="title-size-pill" title="Taille totale sur le disque">
+              <i class="bi bi-database-fill"></i>
               ${sizeLabel}
             </div>
-            <i class="bi bi-chevron-right" style="color:var(--muted);font-size:14px"></i>
+            <i class="bi bi-chevron-right nav-chevron"></i>
           </div>
 
         </div>`;
@@ -356,14 +393,13 @@ function _renderTitle(t) {
     </div>`;
   }
 
-  async function search(query, catId) {
-    try {
-      const url = `${API}/api/admin/library/titles?category_id=${catId}`
-        + (query ? `&search=${encodeURIComponent(query)}` : '');
-      const r = await fetch(url);
-      const titles = await r.json();
-      document.getElementById('titles-list').innerHTML = _titlesHtml(titles);
-    } catch(e) { console.warn('search:', e); }
+  function search(query) {
+    clearTimeout(_searchTimer);
+    _searchTimer = setTimeout(() => {
+      _searchQuery = query;
+      _offset      = 0;
+      _fetchTitles(false);
+    }, 300);
   }
 
   /* ── Détail titre ─────────────────────────────────────────────────────── */
@@ -383,7 +419,7 @@ function _renderTitle(t) {
   }
 
 
-function _renderSeasons(t) {
+  function _renderSeasons(t) {
     const entries = Object.entries(t.seasons);
     if (!entries.length) {
       return `<div class="empty-state"><i class="bi bi-file-x"></i> Aucun fichier</div>`;
@@ -391,7 +427,7 @@ function _renderSeasons(t) {
 
     if (!t.has_seasons) {
       const items = entries.flatMap(([,v]) => v.items);
-      return `<div class="card" style="padding:8px 0">${_renderItems(items, false)}</div>`;
+      return `<div class="card card-flush-t">${_renderItems(items, false)}</div>`;
     }
 
     return entries.map(([season, data]) => {
@@ -407,19 +443,15 @@ function _renderSeasons(t) {
         : `${data.size_gb} Go`;
 
       const propBadgeS = props > 0
-        ? `<span class="badge badge-warn" style="display:inline-block;margin-bottom:4px">
-             ${props} proposition${props > 1 ? 's' : ''}
-           </span>` : '';
+        ? `<span class="badge badge-warn badge-block-b">${props} proposition${props > 1 ? 's' : ''}</span>` : '';
 
       return `<div class="tree-item">
-        <div class="season-row" onclick="toggleTree(this.parentElement.querySelector('.tree-body'), this.querySelector('.bi-chevron-right'))">
-          <div class="season-info" style="flex:0 0 220px">
-            <div style="font-weight:500;font-size:14px">${esc(sLabel)}</div>
+        <div class="season-row" onclick="toggleTree(this.parentElement.querySelector('.tree-body'), this.querySelector('.tree-chevron'))">
+          <div class="season-info">
+            <div class="season-name">${esc(sLabel)}</div>
             ${propBadgeS}
-            ${toRen > 0 ? `<span class="badge badge-warn" style="display:inline-block;margin-bottom:4px;margin-left:4px">${toRen} à renommer</span>` : ''}
-            <div style="font-size:11px;color:var(--muted)">
-              ${data.file_count} fichier${data.file_count>1?'s':''}
-            </div>
+            ${toRen > 0 ? `<span class="badge badge-warn badge-block-b" style="margin-left:4px">${toRen} à renommer</span>` : ''}
+            <div class="season-file-count">${data.file_count} fichier${data.file_count>1?'s':''}</div>
             ${_watchProgress(data.watched_pct)}
           </div>
           <div class="season-stats">
@@ -430,12 +462,12 @@ function _renderSeasons(t) {
             <div class="stat-block-label">Codecs</div>
             ${_statBars(data.codecs, 'codec')}
           </div>
-          <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
-            <div class="weight-pill" style="font-size:12px;padding:5px 10px">
-              <i class="bi bi-database-fill" style="color:var(--blue);font-size:12px"></i>
+          <div class="season-right">
+            <div class="weight-pill weight-pill-sm">
+              <i class="bi bi-database-fill"></i>
               ${sizeLabel}
-            </div>            
-            <i class="bi bi-chevron-right" style="color:var(--muted);font-size:12px;transition:transform .15s"></i>
+            </div>
+            <i class="bi bi-chevron-right tree-chevron"></i>
           </div>
         </div>
         <div class="tree-body">
@@ -448,7 +480,7 @@ function _renderSeasons(t) {
   function _renderItems(items, showEp) {
     return items.map(i => {
       const res = i.height
-        ? (i.height >= 2160 ? '4K' : i.height >= 1080 ? '1080p' : i.height >= 720 ? '720p' : 'SD')
+        ? ((i.width >= 3840 || i.height >= 2160) ? '4K' : (i.width >= 1920 || i.height >= 1080) ? '1080p' : (i.width >= 1280 || i.height >= 720) ? '720p' : 'SD')
         : '';
       const dur = formatDuration(i.duration);
       const size = i.size_bytes
@@ -460,25 +492,21 @@ function _renderSeasons(t) {
         ? `${String(i.season).padStart(2,'0')}x${String(i.episode).padStart(2,'0')}`
         : '';
 
-      return `<div style="display:flex;align-items:center;justify-content:space-between;
-                   padding:8px 4px;border-bottom:1px solid var(--border);font-size:12px"
-                   class="title-row" onclick="Library.openItem(${i.item_id})">
-        <div style="flex:1;min-width:0">
-          <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px">
-            ${showEp && epNum ? `<span style="font-family:monospace;color:var(--blue);font-size:11px">${epNum}</span>` : ''}
-            <span style="font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-              ${esc(i.episode_title || i.filename)}
-            </span>
+      return `<div class="item-row" onclick="Library.openItem(${i.item_id})">
+        <div class="item-main">
+          <div class="item-title-line">
+            ${showEp && epNum ? `<span class="item-ep-num">${epNum}</span>` : ''}
+            <span class="item-title-text">${esc(i.episode_title || i.filename)}</span>
           </div>
-          <div style="color:var(--muted);font-size:11px;display:flex;gap:8px">
+          <div class="item-meta">
             ${i.codec ? `<span>${i.codec.toUpperCase()}</span>` : ''}
             ${res ? `<span>${res}</span>` : ''}
-            ${i.hdr && i.hdr !== 'SDR' ? `<span style="color:var(--purple)">${i.hdr}</span>` : ''}
+            ${i.hdr && i.hdr !== 'SDR' ? `<span class="item-hdr-badge">${i.hdr}</span>` : ''}
             ${dur ? `<span>${dur}</span>` : ''}
             ${size ? `<span>${size}</span>` : ''}
           </div>
         </div>
-        <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
+        <div class="item-badges">
           ${i.prop_id ? `<span class="badge badge-warn"><i class="bi bi-lightbulb"></i></span>` : ''}
           ${i.file_status === 'to_rename' ? `<span class="badge badge-warn"><i class="bi bi-pencil"></i></span>` : ''}
         </div>
@@ -501,13 +529,74 @@ function _renderSeasons(t) {
     }
   }
 
+  function _parseChannelLayout(layoutStr) {
+    const LAYOUTS = {
+      'mono':           ['FC'],
+      'stereo':         ['FL','FR'],
+      '2.1':            ['FL','FR','LFE'],
+      '3.0':            ['FL','FR','FC'],
+      '3.0(back)':      ['FL','FR','BC'],
+      '4.0':            ['FL','FR','FC','BC'],
+      'quad':           ['FL','FR','BL','BR'],
+      'quad(side)':     ['FL','FR','SL','SR'],
+      '4.1':            ['FL','FR','FC','LFE','BC'],
+      '5.0':            ['FL','FR','FC','BL','BR'],
+      '5.0(side)':      ['FL','FR','FC','SL','SR'],
+      '5.1':            ['FL','FR','FC','LFE','BL','BR'],
+      '5.1(side)':      ['FL','FR','FC','LFE','SL','SR'],
+      '6.0':            ['FL','FR','FC','BC','SL','SR'],
+      '6.1':            ['FL','FR','FC','LFE','BC','SL','SR'],
+      '7.0':            ['FL','FR','FC','BL','BR','SL','SR'],
+      '7.1':            ['FL','FR','FC','LFE','BL','BR','SL','SR'],
+      '7.1(wide)':      ['FL','FR','FC','LFE','BL','BR','FLC','FRC'],
+      'octagonal':      ['FL','FR','FC','BL','BR','BC','SL','SR'],
+    };
+    const key = (layoutStr || '').toLowerCase();
+    if (LAYOUTS[key]) return new Set(LAYOUTS[key]);
+    // Explicit channel list (FL+FR+FC...)
+    return new Set((layoutStr || '').toUpperCase().split(/[+\s,]+/).filter(Boolean));
+  }
+
+  function _speakerDiagram(layoutStr) {
+    if (!layoutStr) return '';
+    const active = _parseChannelLayout(layoutStr);
+    const on  = ch => active.has(ch);
+    const spk = (ch, label, extra) =>
+      `<div class="spk-node ${on(ch) ? 'spk-on' : 'spk-off'}${extra ? ' '+extra : ''}" title="${ch}">${label}</div>`;
+    const empty = () => `<div class="spk-empty"></div>`;
+
+    const hasSide  = on('SL') || on('SR');
+    const hasBack  = on('BL') || on('BR') || on('BC');
+    const hasFront = on('FL') || on('FR') || on('FC');
+
+    const frontRow = `<div class="spk-row">
+      ${hasFront ? spk('FL','FL') : empty()}
+      ${spk('FC','C')}
+      ${hasFront ? spk('FR','FR') : empty()}
+    </div>`;
+
+    const midRow = `<div class="spk-row">
+      ${spk('SL','SL')}
+      ${spk('LFE','⊕','spk-lfe')}
+      ${spk('SR','SR')}
+    </div>`;
+
+    const rearRow = `<div class="spk-row">
+      ${on('BL') || on('BC') || on('BR') ? spk('BL','BL') : empty()}
+      ${spk('BC','BC')}
+      ${on('BL') || on('BC') || on('BR') ? spk('BR','BR') : empty()}
+    </div>`;
+
+    return `<div class="spk-diagram">${frontRow}${midRow}${rearRow}</div>`;
+  }
+
   function _audioTracksHtml(audio) {
     const codecs = audio?.codecs || [];
     if (!codecs.length) {
-      return `<div style="font-size:12px;color:var(--muted)">Aucune piste audio</div>`;
+      return `<div class="stat-blank">Aucune piste audio</div>`;
     }
     const n = codecs.length;
-    const cols = `60px ${Array(n).fill('1fr').join(' ')}`;
+    const cols = `72px ${Array(n).fill('1fr').join(' ')}`;
 
     const headerCells = codecs.map((_, i) =>
       `<div class="audio-track-header">Piste ${i + 1}</div>`).join('');
@@ -515,17 +604,30 @@ function _renderSeasons(t) {
     const langRow = codecs.map((_, i) =>
       `<div class="audio-track-value">${esc((audio.languages?.[i] || '?').toUpperCase())}</div>`).join('');
 
+    const fmtRow = codecs.map((_, i) =>
+      `<div class="audio-track-format">${esc(audio.formats?.[i] || codecs[i].toUpperCase())}</div>`).join('');
+
     const chanRow = codecs.map((_, i) =>
       `<div class="audio-track-value">${esc(audio.layouts?.[i] || audio.channels?.[i] || '?')}</div>`).join('');
 
-    const codecRow = codecs.map(c =>
-      `<div class="audio-track-value">${esc(c.toUpperCase())}</div>`).join('');
+    const layoutRow = codecs.map((_, i) => {
+      const diagram = _speakerDiagram(audio.layouts?.[i]);
+      return `<div class="audio-track-value">${diagram}</div>`;
+    }).join('');
+
+    const brRow = codecs.map((_, i) => {
+      const br = audio.bitrates?.[i];
+      const label = br ? `${Math.round(br / 1000)} kb/s` : '—';
+      return `<div class="audio-track-bitrate">${label}</div>`;
+    }).join('');
 
     return `<div class="audio-tracks-grid" style="grid-template-columns:${cols}">
       <div></div>${headerCells}
       <div class="audio-track-row-label">Langue</div>${langRow}
+      <div class="audio-track-row-label">Format</div>${fmtRow}
       <div class="audio-track-row-label">Canaux</div>${chanRow}
-      <div class="audio-track-row-label">Codec</div>${codecRow}
+      <div class="audio-track-row-label">Layout</div>${layoutRow}
+      <div class="audio-track-row-label">Débit</div>${brRow}
     </div>`;
   }
 
@@ -550,9 +652,10 @@ function _renderSeasons(t) {
       ? `${item.video.width}×${item.video.height}`
       : '—';
 
-    const resLabel = item.video?.height
-      ? (item.video.height >= 2160 ? '4K' : item.video.height >= 1080 ? '1080p'
-         : item.video.height >= 720 ? '720p' : 'SD')
+    const _w = item.video?.width || 0, _h = item.video?.height || 0;
+    const resLabel = (_w || _h)
+      ? ((_w >= 3840 || _h >= 2160) ? '4K' : (_w >= 1920 || _h >= 1080) ? '1080p'
+         : (_w >= 1280 || _h >= 720) ? '720p' : 'SD')
       : '';
 
     el.innerHTML = `
@@ -580,7 +683,7 @@ function _renderSeasons(t) {
       <div class="item-detail-header">
         <div>
           <div class="item-detail-title">
-            ${epLabel ? `<span style="color:var(--blue);font-family:monospace">${epLabel}</span> — ` : ''}
+            ${epLabel ? `<span class="ep-badge">${epLabel}</span> — ` : ''}
             ${esc(displayTitle)}
           </div>
           <div class="item-detail-sub">${esc(item.title_name)}</div>
@@ -600,9 +703,7 @@ function _renderSeasons(t) {
           </div>
           <div class="item-detail-row">
             <span class="item-detail-label">Nom</span>
-            <span class="item-detail-value" style="font-family:monospace;font-size:11px;
-                 max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-                 title="${esc(item.filename)}">${esc(item.filename)}</span>
+            <span class="item-detail-value filename-mono" title="${esc(item.filename)}">${esc(item.filename)}</span>
           </div>
           <div class="item-detail-row">
             <span class="item-detail-label">Taille</span>
@@ -616,8 +717,8 @@ function _renderSeasons(t) {
             <span class="item-detail-label">État disque</span>
             <span class="item-detail-value">
               ${item.disk_status === 'present'
-                ? '<span style="color:var(--green)">Présent</span>'
-                : `<span style="color:var(--orange)">${esc(item.disk_status)}</span>`}
+                ? '<span class="status-ok">Présent</span>'
+                : `<span class="status-warn">${esc(item.disk_status)}</span>`}
             </span>
           </div>
         </div>
@@ -646,7 +747,7 @@ function _renderSeasons(t) {
             <span class="item-detail-label">HDR</span>
             <span class="item-detail-value">
               ${item.video?.hdr_format && item.video.hdr_format !== 'SDR'
-                ? `<span style="color:var(--purple)">${esc(item.video.hdr_format)}</span>`
+                ? `<span class="hdr-badge">${esc(item.video.hdr_format)}</span>`
                 : 'SDR'}
             </span>
           </div>
@@ -659,7 +760,7 @@ function _renderSeasons(t) {
          <div class="item-detail-section">
           <div class="item-detail-section-title">
             <i class="bi bi-volume-up"></i> Audio
-            <span style="margin-left:auto;font-size:11px;color:var(--muted);font-weight:400">
+            <span class="audio-count">
               ${item.audio?.codecs?.length || 0} piste${(item.audio?.codecs?.length||0) > 1 ? 's' : ''}
             </span>
           </div>
@@ -681,7 +782,7 @@ function _renderSeasons(t) {
         </div>
 
       </div>
-      
+
       <div class="debug-section">
         <div class="debug-header" onclick="Library.toggleDebug(this)">
           <i class="bi bi-bug"></i>
@@ -707,7 +808,6 @@ function _renderSeasons(t) {
         body: JSON.stringify({ watched: newState }),
       });
       if (!r.ok) throw new Error('Erreur');
-      // Recharger la fiche
       openItem(itemId);
     } catch(e) {
       alert('Erreur : ' + e.message);
@@ -730,9 +830,8 @@ function _renderSeasons(t) {
     return `${m}min`;
   }
 
-  // Exposer toggleTree globalement pour les onclick dans le HTML généré
   window.toggleTree = toggleTree;
 
-  return { init, openCategory, openTitle, search, openItem, toggleWatched, toggleDebug };
+  return { init, openCategory, openTitle, search, openItem, toggleWatched, toggleDebug, changePage, changeLimit };
 
 })();

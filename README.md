@@ -1,7 +1,18 @@
 # MediaManager 2026
 
-Service de gestion de fichiers vidéo : surveillance des NAS, détection,
-analyse et organisation automatique.
+Service de gestion de fichiers vidéo : surveillance de NAS (SMB/NFS), détection, analyse ffprobe, catalogage automatique et interface de renommage.
+
+## Fonctionnalités
+
+- **Surveillance NAS** — montages SMB/NFS scannés en arrière-plan, détection des nouveaux fichiers et des suppressions
+- **Analyse ffprobe** — extraction codec, résolution, bitrate, HDR, pistes audio (format Dolby/DTS/TrueHD, layout canaux, bitrate), sous-titres
+- **Catalogue** — titres et épisodes regroupés automatiquement, propositions de renommage générées selon des règles configurables
+- **Interface bibliothèque** — navigation catégories → titres → épisodes, filtres, recherche, marquer comme vu, détail technique complet
+- **Interface renommage** — validation des propositions titre par titre, édition inline, aperçu en temps réel
+- **Interface admin** — dashboard, gestion des montages, configuration, logs, mise à jour via GitHub
+- **Thèmes** — dark / light / auto
+
+---
 
 ## Identifiants par défaut après installation
 
@@ -51,8 +62,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/higs76/mediamanager2026/main
 
 | Service | URL |
 |---|---|
+| Interface bibliothèque | `http://<IP_LXC>:8000/` |
 | Interface admin | `http://<IP_LXC>:8000/admin/` |
-| API REST | `http://<IP_LXC>:8000` |
 | Documentation API | `http://<IP_LXC>:8000/docs` |
 
 ---
@@ -106,80 +117,77 @@ Fichier : `/home/mediamanager/app/.env`
 
 ```
 mediamanager2026/
-├── watcher/                  # Service principal
-│   ├── app.py               # Application FastAPI + démarrage
-│   ├── api.py               # Endpoints admin (montages, sync, update)
-│   ├── config.py            # Configuration depuis .env
-│   └── database.py          # Connexion SQLAlchemy
+├── watcher/                      # Service principal FastAPI
+│   ├── app.py                   # Cycle de vie, middleware, montage statiques
+│   ├── api.py                   # Assembleur des routers
+│   ├── scanner.py               # Détection fichiers sur NAS (ScanQueue)
+│   ├── analyzer.py              # Extraction ffprobe (AnalyzeQueue)
+│   ├── cataloger.py             # Construction catalogue + propositions (CatalogQueue)
+│   ├── config.py                # Variables d'environnement (.env)
+│   ├── config_db.py             # Configuration dynamique depuis la BDD
+│   ├── database.py              # Connexion SQLAlchemy
+│   ├── routers/
+│   │   ├── library.py           # Bibliothèque : catégories, titres, items, détail
+│   │   ├── categories.py        # CRUD catégories, règles de nommage
+│   │   ├── mounts.py            # CRUD montages NAS, sync, browse
+│   │   ├── stats.py             # Statistiques qualité, jobs
+│   │   └── system.py            # Config, update, version, logs
+│   └── utils/
+│       ├── perf.py              # Ring buffer monitoring performances SQL
+│       ├── versioning.py        # git info, GitHub releases
+│       └── system_info.py       # hostname, IP, uptime
 ├── database/
-│   └── schema.sql           # Structure des tables (appliqué auto au démarrage)
-├── frontend/admin/          # Interface web d'administration
-│   ├── index.html           # Shell HTML
-│   ├── admin.css            # Styles (thèmes dark/light/auto)
-│   ├── admin.js             # Dashboard, logs, API, versioning
-│   └── mounts.js            # Gestion des montages NAS
+│   ├── schema.sql               # Structure des tables (appliqué auto au démarrage)
+│   └── migrations/              # Migrations incrémentielles (appliquées une seule fois)
+├── frontend/
+│   ├── app/                     # Interface utilisateur (bibliothèque + renommage)
+│   │   ├── index.html
+│   │   ├── app.css              # Styles (thèmes dark/light/auto, ~1000 lignes)
+│   │   ├── library.js           # Navigation catalogue, détail technique
+│   │   └── rename.js            # Interface validation propositions de renommage
+│   └── admin/                   # Interface d'administration
+│       ├── index.html
+│       ├── admin.css
+│       ├── admin.js             # Dashboard, logs, jobs
+│       ├── mounts.js            # Gestion montages NAS
+│       ├── config.js            # Éditeur configuration
+│       ├── stats.js             # Statistiques qualité vidéo
+│       └── perf.js              # Monitoring performances SQL
 ├── scripts/
-│   ├── mediamanager-proxmox.sh      # Création du LXC sur Proxmox
-│   ├── proxmox-install.sh           # Installation dans le LXC
-│   └── mediamanager-watcher.service # Unité systemd
-├── tests/                   # Tests (à développer)
-├── run.py                   # Point d'entrée uvicorn
-├── .env.example             # Template de configuration
-└── VERSION                  # Version actuelle (ex: 0.4.0)
+│   ├── mediamanager-proxmox.sh          # Création du LXC sur Proxmox
+│   ├── proxmox-install.sh               # Installation dans le LXC
+│   ├── mediamanager-watcher.service     # Unité systemd
+│   └── deploy-to-lxc.ps1               # Déploiement rapide depuis Windows
+├── run.py                       # Point d'entrée uvicorn
+├── .env.example                 # Template de configuration
+└── VERSION                      # Version actuelle (ex: 0.5.2-dev)
 ```
 
 ---
 
 ## Base de données
 
-Les tables sont créées automatiquement au démarrage depuis `database/schema.sql`.
-Aucune action manuelle nécessaire.
+Les tables sont créées automatiquement au démarrage depuis `database/schema.sql`.  
+Les migrations dans `database/migrations/` sont appliquées une seule fois et tracées dans `schema_migrations`.
 
 Tables principales :
-- `categories` — types de médias (séries, films, animés…)
-- `mounts` — montages NAS (header commun SMB/NFS)
-- `mount_smb` — paramètres spécifiques SMB/CIFS
-- `mount_nfs` — paramètres spécifiques NFS
-- `files` — fichiers détectés
-- `video_metadata` — métadonnées vidéo (Phase 2)
-- `rename_proposals` — propositions de renommage (Phase 3)
 
----
-
-## Versioning
-
-| Suffixe | Branche | Visibilité |
-|---|---|---|
-| `0.4.0` | `main` | Tous les utilisateurs |
-| `0.4.0-dev` | `dev` | Développeur uniquement (`ALLOW_PRERELEASE=true`) |
-
-### Publier une nouvelle version
-
-```bash
-# Branche dev → test
-git tag v0.4.0-dev
-git push origin v0.4.0-dev
-# Sur GitHub : Create release → cocher "Pre-release"
-
-# Branche main → release stable
-git checkout main && git merge dev
-echo "0.4.0" > VERSION
-git tag v0.4.0
-git push origin main && git push origin v0.4.0
-# Sur GitHub : Create release → NE PAS cocher "Pre-release"
-git checkout dev && git merge main
-```
-
----
-
-## Roadmap
-
-- [x] Phase 1 — Watcher fiable + gestion montages NAS (SMB/NFS)
-- [x] Interface admin (dashboard, logs, API, thèmes)
-- [x] Mise à jour automatique via GitHub
-- [ ] Phase 2 — Extraction métadonnées vidéo (ffprobe/mediainfo)
-- [ ] Phase 3 — Moteur de règles de renommage
-- [ ] Phase 4 — Interface utilisateur finale
+| Table | Description |
+|---|---|
+| `categories` | Types de médias (Séries, Films, Animés…) |
+| `mounts` | Montages NAS (header commun SMB/NFS) |
+| `mount_smb` | Paramètres spécifiques SMB/CIFS |
+| `mount_nfs` | Paramètres spécifiques NFS |
+| `media_files` | Fichiers détectés sur les montages |
+| `media_titles` | Titres catalogués (série ou film) |
+| `media_items` | Épisodes / fichiers liés à un titre |
+| `video_metadata` | Métadonnées ffprobe (codec, résolution, audio, HDR…) |
+| `rename_proposals` | Propositions de renommage générées par le catalogueur |
+| `media_files_history` | Historique des fichiers renommés |
+| `app_config` | Configuration dynamique (clé/valeur) |
+| `scan_jobs` | Historique des scans par montage |
+| `analyze_sessions` | Sessions d'analyse ffprobe |
+| `schema_migrations` | Migrations appliquées |
 
 ---
 
@@ -189,5 +197,47 @@ git checkout dev && git merge main
 - Python 3.12+
 - PostgreSQL 15+
 - Ubuntu 24.04 (dans le LXC)
+- ffprobe (ffmpeg) — installé automatiquement par le script
 
-# ![Dashboard](docs/screenshots/dashboard.png)
+---
+
+## Versioning
+
+| Suffixe | Branche | Visibilité |
+|---|---|---|
+| `0.5.2` | `main` | Tous les utilisateurs |
+| `0.5.2-dev` | `dev` | Développeur uniquement (`ALLOW_PRERELEASE=true`) |
+
+### Publier une nouvelle version
+
+```bash
+# Branche dev → pre-release
+git tag v0.5.2-dev
+git push origin v0.5.2-dev
+# Sur GitHub : Create release → cocher "Pre-release"
+
+# Branche main → release stable
+git checkout main && git merge dev
+echo "0.5.2" > VERSION
+git tag v0.5.2
+git push origin main && git push origin v0.5.2
+# Sur GitHub : Create release → NE PAS cocher "Pre-release"
+git checkout dev && git merge main
+```
+
+---
+
+## Roadmap
+
+- [x] Phase 1 — Watcher + gestion montages NAS (SMB/NFS), scan arrière-plan
+- [x] Phase 1 — Interface admin (dashboard, logs, montages, configuration)
+- [x] Phase 1 — Mise à jour automatique via GitHub
+- [x] Phase 2 — Extraction métadonnées vidéo (ffprobe) : codec, résolution, bitrate vidéo/audio, HDR, layout canaux, format Dolby/DTS
+- [x] Phase 2 — Statistiques qualité par catégorie (résolutions, codecs, poids)
+- [x] Phase 3 — Catalogueur automatique (titres, épisodes, saisons)
+- [x] Phase 3 — Moteur de propositions de renommage (règles configurables)
+- [x] Phase 4 — Interface bibliothèque (navigation, recherche, détail technique, marquer vu)
+- [x] Phase 4 — Interface renommage (validation, édition inline, aperçu)
+- [ ] Authentification (HTTP Basic Auth)
+- [ ] Tests d'intégration
+- [ ] Champs audio en arrays PostgreSQL natifs (TEXT[])

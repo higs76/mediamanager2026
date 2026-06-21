@@ -282,6 +282,8 @@ CREATE TABLE IF NOT EXISTS video_metadata (
     video_height          INTEGER,
     video_fps             FLOAT,
     audio_codecs          TEXT,
+    audio_bitrates        TEXT,
+    audio_profiles        TEXT,
     audio_languages       TEXT,
     audio_channels        TEXT,
     audio_channel_layouts TEXT,
@@ -312,6 +314,6 @@ CREATE INDEX IF NOT EXISTS idx_metadata_file ON video_metadata(file_id);
 -- Trace les migrations déjà appliquées.
 -- ============================================================
 CREATE TABLE IF NOT EXISTS schema_migrations (
-    version     VARCHAR(20) PRIMARY KEY,
+    version     VARCHAR(60) PRIMARY KEY,
     applied_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
