@@ -1,11 +1,42 @@
 /* =============================================================================
    MediaManager 2026 — config.js
-   Gestion de la configuration
+   Gestion de la configuration — regroupée par domaine fonctionnel
    ============================================================================= */
 
 const Config = (() => {
 
   let _data = [];
+
+  // Regroupement thématique — l'ordre des clés dans chaque section est
+  // volontaire (pas alphabétique). Toute clé absente d'ici atterrit dans
+  // une section "Autres" en filet de sécurité (voir _render).
+  const SECTIONS = [
+    { title: 'Scan', icon: 'bi-search',
+      keys: ['scan_interval_hours', 'video_extensions', 'scan_excluded_dirs', 'scan_trash_dirs'] },
+    { title: 'Analyse', icon: 'bi-cpu',
+      keys: ['analyze_auto', 'analyze_workers', 'analyze_session_size'] },
+    { title: 'Catalogue & renommage', icon: 'bi-tags',
+      keys: ['catalog_interval_hours', 'catalog_tech_tags', 'catalog_bonus_dirs'] },
+    { title: 'Montages NAS', icon: 'bi-hdd-network',
+      keys: ['mount_watchdog_interval', 'mount_status_refresh_interval'] },
+    { title: 'Interface', icon: 'bi-display',
+      keys: ['services_refresh_interval'] },
+    { title: 'Logs', icon: 'bi-file-earmark-text',
+      keys: ['log_retention_days'] },
+  ];
+
+  // Séparateur explicite pour les champs "liste" — évite de deviner depuis
+  // le contenu (une valeur à un seul élément n'aurait pas de séparateur).
+  const LIST_SEP = {
+    catalog_tech_tags:  ';',
+    scan_excluded_dirs: ',',
+    scan_trash_dirs:    ',',
+    catalog_bonus_dirs: ',',
+  };
+
+  // Réglages dont un changement ne s'applique qu'au prochain redémarrage
+  // du service (lus une seule fois au bootstrap, pas relus en boucle).
+  const RESTART_REQUIRED = new Set(['log_retention_days']);
 
   async function load() {
     try {
@@ -21,20 +52,53 @@ const Config = (() => {
     const box = document.getElementById('config-list');
     if (!box) return;
 
-    box.innerHTML = _data.map(item => `
-      <div class="config-card" id="config-card-${_esc(item.key)}">
+    const byKey  = Object.fromEntries(_data.map(d => [d.key, d]));
+    const placed = new Set();
+
+    let html = SECTIONS.map(section => {
+      const items = section.keys.map(k => byKey[k]).filter(Boolean);
+      items.forEach(i => placed.add(i.key));
+      return items.length ? _sectionHtml(section, items) : '';
+    }).join('');
+
+    // Filet de sécurité : une clé ajoutée en base sans être catégorisée
+    // ici reste visible plutôt que de disparaître silencieusement.
+    const orphans = _data.filter(d => !placed.has(d.key));
+    if (orphans.length) {
+      html += _sectionHtml({ title: 'Autres', icon: 'bi-three-dots' }, orphans);
+    }
+
+    box.innerHTML = html;
+  }
+
+  function _sectionHtml(section, items) {
+    return `
+      <div class="config-section">
+        <div class="config-section-title"><i class="bi ${section.icon}"></i> ${escHtml(section.title)}</div>
+        <div class="config-section-grid">
+          ${items.map(_cardHtml).join('')}
+        </div>
+      </div>`;
+  }
+
+  function _cardHtml(item) {
+    const wide = item.key === 'video_extensions' || !!LIST_SEP[item.key];
+    const restartBadge = RESTART_REQUIRED.has(item.key)
+      ? `<span class="config-restart-badge" title="Le changement ne prend effet qu'au prochain redémarrage du service">redémarrage requis</span>`
+      : '';
+    return `
+      <div class="config-card${wide ? ' config-card-wide' : ''}" id="config-card-${escHtml(item.key)}">
         <div class="config-header">
           <div>
-            <div class="config-key">${_esc(item.key)}</div>
-            <div class="config-desc">${_esc(item.description ?? '')}</div>
+            <div class="config-key">${escHtml(item.key)} ${restartBadge}</div>
+            <div class="config-desc">${escHtml(item.description ?? '')}</div>
           </div>
-          <div id="config-status-${_esc(item.key)}" class="config-status"></div>
+          <div id="config-status-${escHtml(item.key)}" class="config-status"></div>
         </div>
         <div class="config-body">
           ${_renderField(item)}
         </div>
-      </div>
-    `).join('');
+      </div>`;
   }
 
   function _renderField(item) {
@@ -46,8 +110,8 @@ const Config = (() => {
           <div class="ext-tags" id="ext-tags">
             ${exts.map(e => `
               <span class="ext-tag">
-                ${_esc(e)}
-                <button onclick="Config.removeExt('${_esc(e)}')" title="Supprimer">×</button>
+                ${escHtml(e)}
+                <button onclick="Config.removeExt('${escHtml(e)}')" title="Supprimer">×</button>
               </span>`).join('')}
           </div>
           <div class="flex-row mt-10">
@@ -63,7 +127,7 @@ const Config = (() => {
         return `
           <div class="toggle-row">
             <span class="toggle-label">
-              ${checked ? 'Activé — analyse lancée automatiquement après chaque scan' 
+              ${checked ? 'Activé — analyse lancée automatiquement après chaque scan'
                         : 'Désactivé — analyse manuelle uniquement'}
             </span>
             <label class="toggle">
@@ -74,48 +138,46 @@ const Config = (() => {
           </div>`;
 
       default:
-        // Valeur semicolon-délimitée → liste de tags (comme video_extensions)
-        if (item.value.includes(';')) {
-          return _renderTagField(item);
-        }
+        const sep = LIST_SEP[item.key];
+        if (sep) return _renderTagField(item, sep);
         // Number() est strict (pas de préfixe partiel comme parseFloat("4K") → 4)
         const isNum = item.value.trim() !== '' && !isNaN(Number(item.value));
         return `
           <div class="flex-row">
-            <input id="cfg-${_esc(item.key)}"
+            <input id="cfg-${escHtml(item.key)}"
                    type="${isNum ? 'number' : 'text'}"
-                   value="${_esc(item.value)}"
+                   value="${escHtml(item.value)}"
                    class="input-sm"
-                   onkeydown="if(event.key==='Enter') Config.saveField('${_esc(item.key)}')">
+                   onkeydown="if(event.key==='Enter') Config.saveField('${escHtml(item.key)}')">
             <button class="btn btn-sm btn-primary"
-                    onclick="Config.saveField('${_esc(item.key)}')">
+                    onclick="Config.saveField('${escHtml(item.key)}')">
               <i class="bi bi-check2"></i> Enregistrer
             </button>
           </div>`;
     }
   }
 
-  function _renderTagField(item) {
-    const tags = item.value.split(';').filter(Boolean);
-    const key  = _esc(item.key);
+  function _renderTagField(item, sep) {
+    const tags = item.value.split(sep).filter(Boolean);
+    const key  = escHtml(item.key);
     return `
       <div class="ext-tags" id="tags-${key}">
         ${tags.map(t => `
           <span class="ext-tag">
-            ${_esc(t)}
-            <button onclick="Config.removeTag('${key}', '${_esc(t)}')" title="Supprimer">×</button>
+            ${escHtml(t)}
+            <button onclick="Config.removeTag('${key}', '${escHtml(t)}', '${sep}')" title="Supprimer">×</button>
           </span>`).join('')}
       </div>
       <div class="flex-row mt-10">
-        <input id="tag-new-${key}" type="text" placeholder="nouveau tag" class="input-md"
-               onkeydown="if(event.key==='Enter') Config.addTag('${key}')">
-        <button class="btn btn-sm btn-success" onclick="Config.addTag('${key}')">
+        <input id="tag-new-${key}" type="text" placeholder="nouvel élément" class="input-md"
+               onkeydown="if(event.key==='Enter') Config.addTag('${key}', '${sep}')">
+        <button class="btn btn-sm btn-success" onclick="Config.addTag('${key}', '${sep}')">
           <i class="bi bi-plus-lg"></i> Ajouter
         </button>
       </div>`;
   }
 
-  /* ── Extensions ───────────────────────────────────────────────────────── */
+  /* ── Extensions (video_extensions — cas particulier : préfixe '.') ──────── */
   function _getExts() {
     const item = _data.find(d => d.key === 'video_extensions');
     return item ? item.value.split(';').filter(Boolean) : [];
@@ -142,29 +204,29 @@ const Config = (() => {
     await _save('video_extensions', exts.join(';'));
   }
 
-  /* ── Tags génériques (catalog_tech_tags et toute clé semicolon) ────────── */
-  function _getTags(key) {
+  /* ── Tags génériques (tout champ liste — séparateur explicite) ──────────── */
+  function _getTags(key, sep) {
     const item = _data.find(d => d.key === key);
-    return item ? item.value.split(';').filter(Boolean) : [];
+    return item ? item.value.split(sep).filter(Boolean) : [];
   }
 
-  async function addTag(key) {
+  async function addTag(key, sep) {
     const input = document.getElementById(`tag-new-${key}`);
     const val   = (input?.value || '').trim();
     if (!val) return;
-    const tags = _getTags(key);
+    const tags = _getTags(key, sep);
     if (tags.includes(val)) {
-      _setStatus(key, 'warn', 'Tag déjà présent');
+      _setStatus(key, 'warn', 'Élément déjà présent');
       return;
     }
     tags.push(val);
-    await _save(key, tags.join(';'));
+    await _save(key, tags.join(sep));
     if (input) input.value = '';
   }
 
-  async function removeTag(key, tag) {
-    const tags = _getTags(key).filter(t => t !== tag);
-    await _save(key, tags.join(';'));
+  async function removeTag(key, tag, sep) {
+    const tags = _getTags(key, sep).filter(t => t !== tag);
+    await _save(key, tags.join(sep));
   }
 
   /* ── Toggle ───────────────────────────────────────────────────────────── */
@@ -213,12 +275,6 @@ const Config = (() => {
     if (!el) return;
     el.className = `config-status${type ? ' config-status-' + type : ''}`;
     el.textContent = msg;
-  }
-
-  function _esc(s) {
-    return String(s ?? '')
-      .replace(/&/g,'&amp;').replace(/</g,'&lt;')
-      .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
   return { load, addExt, removeExt, saveToggle, saveField, addTag, removeTag };

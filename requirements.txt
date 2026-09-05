@@ -2,8 +2,9 @@
 python-dotenv
 psycopg2-binary
 sqlalchemy
-fastapi
-uvicorn
+fastapi>=0.141.1
+starlette>=1.6.0
+uvicorn[standard]>=0.52.4
 pydantic
 aiofiles
 requests
@@ -12,3 +13,5 @@ watchdog
 pytest
 pytest-asyncio
 python-json-logger
+bcrypt
+itsdangerous

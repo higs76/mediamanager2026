@@ -6,6 +6,7 @@ Routes depuis api.py : /api/admin/config, /update, /version/check, /purge
 
 import logging
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -109,6 +110,7 @@ def get_dashboard():
     mounts_info      = get_mounts_info()
 
     library_stats: dict = {}
+    pg_stats:      dict = {}
     db_size  = "—"
     try:
         with engine.connect() as conn:
@@ -116,6 +118,42 @@ def get_dashboard():
                 "SELECT pg_size_pretty(pg_database_size(current_database()))"
             )).fetchone()
             db_size = db_row[0] if db_row else "—"
+
+            # ── Stats PostgreSQL ──────────────────────────────────────────────
+            ver_row = conn.execute(text("SHOW server_version")).fetchone()
+            pg_version = (ver_row[0] or "").split(" ")[0] if ver_row else "—"
+
+            conn_row = conn.execute(text(
+                "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database()"
+            )).fetchone()
+            pg_connections = int(conn_row[0]) if conn_row else 0
+
+            sdb_row = conn.execute(text("""
+                SELECT blks_hit, blks_read, xact_commit, xact_rollback, deadlocks
+                FROM pg_stat_database WHERE datname = current_database()
+            """)).fetchone()
+            if sdb_row:
+                blks_hit, blks_read = int(sdb_row[0]), int(sdb_row[1])
+                total_blks = blks_hit + blks_read
+                cache_hit = round(blks_hit * 100.0 / total_blks, 1) if total_blks > 0 else None
+                pg_stats = {
+                    "version":     pg_version,
+                    "connections": pg_connections,
+                    "cache_hit":   cache_hit,
+                    "commits":     int(sdb_row[2]),
+                    "rollbacks":   int(sdb_row[3]),
+                    "deadlocks":   int(sdb_row[4]),
+                }
+            else:
+                pg_stats = {"version": pg_version, "connections": pg_connections}
+
+            dead_row = conn.execute(text(
+                "SELECT COALESCE(SUM(n_dead_tup),0), COALESCE(SUM(n_live_tup),0) FROM pg_stat_user_tables"
+            )).fetchone()
+            if dead_row:
+                dead, live = int(dead_row[0]), int(dead_row[1])
+                pg_stats["dead_tup"] = dead
+                pg_stats["bloat_pct"] = round(dead * 100.0 / (dead + live), 1) if (dead + live) > 0 else 0.0
 
             status_rows = conn.execute(text("""
                 SELECT status, disk_status, COUNT(*)
@@ -144,6 +182,11 @@ def get_dashboard():
             nb_titles     = int(titles_row[0] or 0)
             total_seconds = int(titles_row[1] or 0)
 
+            trash_row = conn.execute(text(
+                "SELECT COALESCE(SUM(size_bytes),0) FROM trash_folders"
+            )).fetchone()
+            trash_bytes = int(trash_row[0] or 0)
+
             library_stats = {
                 "total_files":     total_files,
                 "analyzed_files":  analyzed_files,
@@ -152,6 +195,7 @@ def get_dashboard():
                 "total_tb":        total_tb,
                 "nb_titles":       nb_titles,
                 "total_seconds":   total_seconds,
+                "trash_bytes":     trash_bytes,
             }
     except Exception as e:
         logger.warning(f"get_dashboard library_stats: {e}")
@@ -171,11 +215,15 @@ def get_dashboard():
                 "pid":    os.getpid()
             },
             "database": {
-                "name":     "PostgreSQL",
-                "status":   "connected" if db_ok else "disconnected",
-                "type":     "PostgreSQL 16",
-                "database": "mediamanager_db",
-                "size":     db_size
+                "name":        "PostgreSQL",
+                "status":      "connected" if db_ok else "disconnected",
+                "type":        f"PostgreSQL {pg_stats.get('version', '—')}",
+                "database":    "mediamanager_db",
+                "size":        db_size,
+                "connections": pg_stats.get("connections"),
+                "cache_hit":   pg_stats.get("cache_hit"),
+                "deadlocks":   pg_stats.get("deadlocks"),
+                "bloat_pct":   pg_stats.get("bloat_pct"),
             },
             "mounts": {
                 "name":    "SMB Mounts",
@@ -197,26 +245,54 @@ def get_dashboard():
 
 # ── Logs ──────────────────────────────────────────────────────────────────────
 
+_LOG_RE = re.compile(
+    r'^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),\d+\s+-\s+([\w\.]+)\s+-\s+'
+    r'(DEBUG|INFO|WARNING|ERROR|CRITICAL)\s+-\s+(.*)$'
+)
+
+
 @router.get("/logs")
-def get_logs(lines: int = 50):
-    """Retourne les N dernières lignes du fichier log."""
+def get_logs(lines: int = 100, level: str = "", module: str = ""):
+    """Retourne les N dernières entrées de log, structurées et filtrables."""
     if not LOG_FILE.exists():
-        return JSONResponse({
-            "error": f"Fichier log introuvable : {LOG_FILE}",
-            "logs":  []
-        }, status_code=404)
+        return JSONResponse({"error": f"Fichier log introuvable : {LOG_FILE}",
+                             "logs": [], "modules": []}, status_code=404)
     try:
-        log_lines = LOG_FILE.read_text().split('\n')
-        last_lines = log_lines[-lines:] if len(log_lines) > lines else log_lines
-        return JSONResponse({
-            "file":           str(LOG_FILE),
-            "total_lines":    len(log_lines),
-            "returned_lines": len(last_lines),
-            "logs":           last_lines
-        })
+        raw_lines = LOG_FILE.read_text(encoding="utf-8", errors="replace").split("\n")
+
+        entries: list[dict] = []
+        for raw in raw_lines:
+            if not raw.strip():
+                continue
+            m = _LOG_RE.match(raw)
+            if m:
+                ts_full, mod, lvl, msg = m.groups()
+                # DD/MM HH:MM:SS — la date évite de confondre une vieille erreur
+                # avec un événement du jour quand on relit les logs plus tard.
+                ts = f"{ts_full[8:10]}/{ts_full[5:7]} {ts_full[11:19]}"
+                entries.append({
+                    "ts":      ts,
+                    "level":   lvl,
+                    "module":  mod.split(".")[-1],       # watcher.scanner → scanner
+                    "message": msg.strip(),
+                })
+            elif entries:
+                entries[-1]["message"] += "\n" + raw    # continuation (traceback)
+
+        modules = sorted({e["module"] for e in entries})
+
+        if level:
+            lvl_up = level.upper()
+            entries = [e for e in entries if e["level"] == lvl_up]
+        if module:
+            entries = [e for e in entries if e["module"] == module]
+
+        entries = entries[-lines:] if len(entries) > lines else entries
+
+        return JSONResponse({"logs": entries, "modules": modules})
     except Exception as e:
         logger.error(f"get_logs: {e}")
-        return JSONResponse({"error": str(e), "logs": []}, status_code=500)
+        return JSONResponse({"error": str(e), "logs": [], "modules": []}, status_code=500)
 
 
 # ── Services ──────────────────────────────────────────────────────────────────

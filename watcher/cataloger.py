@@ -20,7 +20,9 @@ from datetime import datetime
 
 from sqlalchemy import text
 from watcher.database import engine
-from watcher.config_db import get_config, get_video_extensions
+from watcher.config_db import (
+    get_config, get_video_extensions, get_ignored_scan_dirs, get_trash_scan_dirs,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +44,19 @@ def get_catalog_interval_hours() -> float:
         return float(get_config("catalog_interval_hours", "24"))
     except ValueError:
         return 24.0
+
+
+def _excluded_dir_names() -> set:
+    """Noms de dossiers à ne jamais cataloguer (ignorés + corbeilles configurés).
+    Match exact insensible à la casse — ne PAS utiliser un simple préfixe '#'/'@',
+    ça exclurait aussi un vrai titre nommé ainsi (ex: '#Chef (2014)')."""
+    return get_ignored_scan_dirs() | get_trash_scan_dirs()
+
+
+def _bonus_dir_names() -> set:
+    """Noms de dossiers de bonus à ignorer lors du catalogage des séries."""
+    raw = get_config("catalog_bonus_dirs", "bonus,extras,featurettes")
+    return {d.strip().lower() for d in raw.split(",") if d.strip()}
 
 
 # ─────────────────────────────────────────────────────────────
@@ -96,6 +111,45 @@ def extract_season_episode(filename: str) -> tuple[int | None, int | None]:
         if m:
             return int(m.group(1)), int(m.group(2))
     return None, None
+
+
+_MULTI_EP_PATTERN = re.compile(r'(\d{1,3})[xX](\d{1,4})((?:_\d{1,4})+)')
+
+
+def extract_multi_episode_range(filename: str) -> tuple[int, int, int] | None:
+    """Détecte un fichier regroupant plusieurs épisodes consécutifs (sortie
+    Blu-ray/DVD courante), ex: '00x01_04' → saison 0, épisodes 1 à 4,
+    ou '02x06_07_08' → épisodes 6 à 8. Distingue d'un indicateur de partie
+    (ex: '04x08_1' = épisode 8 partie 1, PAS épisodes 1 à 8) en exigeant que
+    le dernier numéro soit strictement supérieur au premier."""
+    m = _MULTI_EP_PATTERN.search(filename)
+    if not m:
+        return None
+    season  = int(m.group(1))
+    base_ep = int(m.group(2))
+    chunks  = [int(x) for x in m.group(3).split('_') if x]
+    ep_end  = max(chunks)
+    if ep_end <= base_ep:
+        return None
+    return season, base_ep, ep_end
+
+
+def extract_multi_episode_title(filename: str) -> str | None:
+    """Titre partagé d'un fichier multi-épisodes (même logique que
+    extract_episode_title, ancrée sur le motif NxM_K plutôt que NxM)."""
+    stem = Path(filename).stem
+    if '.' in stem and ' ' not in stem:
+        stem = dots_to_spaces(stem)
+    m = _MULTI_EP_PATTERN.search(stem)
+    if not m:
+        return None
+    after = stem[m.end():].strip()
+    after = re.sub(r'^[\s\-–]+', '', after).strip()
+    after = clean_name(after)
+    after = _MULTI_SPACES.sub(' ', after).strip()
+    after = _YEAR_PLAIN.sub('', after).strip()
+    after = _PARASITIC_SUFFIX.sub('', after).strip()
+    return after if len(after) > 2 else None
 
 
 def extract_episode_title(filename: str) -> str | None:
@@ -301,13 +355,14 @@ def load_template(template_id: int | None) -> dict | None:
 def catalog_movies(mount_id: int, local_path: str,
                    category_id: int, template: dict):
     logger.info(f"Films — mount {mount_id}")
-    bonus = (template.get('bonus_folder') or 'Bonus').lower()
+    bonus    = (template.get('bonus_folder') or 'Bonus').lower()
+    excluded = _excluded_dir_names()
 
     try:
         # Trier par mtime décroissant (récents en premier)
         entries = sorted(
             [e for e in os.scandir(local_path) if e.is_dir()
-             and not e.name.startswith('.') and not e.name.startswith('@') and not e.name.startswith('#')],
+             and not e.name.startswith('.') and e.name.lower() not in excluded],
             key=lambda e: e.stat().st_mtime,
             reverse=True
         )
@@ -371,8 +426,14 @@ def _process_movie_folder(mount_id, category_id, template,
 
 
 def _process_movie_files(mount_id, title_id, template, folder_path,
-                          folder_name, clean_folder, year, bonus_folder):
+                          folder_name, clean_folder, year, bonus_folder,
+                          path_prefix=None, is_bonus=False):
+    """path_prefix : préfixe de path_relative (par défaut folder_name).
+    is_bonus=True : contenu du dossier bonus — référencé (poids, présence,
+    navigable) mais sans tentative de renommage, le nom d'un featurette
+    n'ayant pas vocation à suivre le format du film."""
     exts = get_video_extensions()
+    path_prefix = path_prefix or folder_name
 
     try:
         entries = sorted(
@@ -385,14 +446,26 @@ def _process_movie_files(mount_id, title_id, template, folder_path,
 
     for entry in entries:
         if entry.is_dir():
-            if entry.name.lower() == bonus_folder:
-                logger.debug(f"Bonus ignoré : {entry.path}")
+            if is_bonus:
+                # Déjà dans le bonus : on descend sans condition — le contenu
+                # peut être organisé en sous-dossiers (scènes coupées, coulisses...).
+                _process_movie_files(
+                    mount_id, title_id, template, entry.path,
+                    folder_name, clean_folder, year, bonus_folder,
+                    path_prefix=f"{path_prefix}/{entry.name}", is_bonus=True
+                )
+            elif entry.name.lower() == bonus_folder:
+                _process_movie_files(
+                    mount_id, title_id, template, entry.path,
+                    folder_name, clean_folder, year, bonus_folder,
+                    path_prefix=f"{path_prefix}/{entry.name}", is_bonus=True
+                )
             continue
         if Path(entry.name).suffix.lower() not in exts:
             continue
 
         filename = entry.name
-        well_named = is_clean_movie_file(filename, folder_name)
+        well_named = True if is_bonus else is_clean_movie_file(filename, folder_name)
 
         try:
             with engine.connect() as conn:
@@ -402,7 +475,7 @@ def _process_movie_files(mount_id, title_id, template, folder_path,
                     AND disk_status='present'
                 """), {
                     "mid": mount_id,
-                    "path": f"{folder_name}/{filename}"
+                    "path": f"{path_prefix}/{filename}"
                 }).fetchone()
                 if not mf:
                     continue
@@ -414,15 +487,19 @@ def _process_movie_files(mount_id, title_id, template, folder_path,
 
                 if not existing:
                     row = conn.execute(text("""
-                        INSERT INTO media_items (title_id, file_id, file_status)
-                        VALUES (:tid, :fid, :st) RETURNING id
+                        INSERT INTO media_items (title_id, file_id, file_status, is_bonus)
+                        VALUES (:tid, :fid, :st, :bonus) RETURNING id
                     """), {
                         "tid": title_id, "fid": file_id,
-                        "st": 'ok' if well_named else 'to_rename'
+                        "st": 'ok' if well_named else 'to_rename',
+                        "bonus": is_bonus,
                     }).fetchone()
                     item_id = row[0]
                 else:
                     item_id = existing[0]
+                    conn.execute(text(
+                        "UPDATE media_items SET is_bonus=:bonus WHERE id=:id"
+                    ), {"bonus": is_bonus, "id": item_id})
                     if existing[1] == 'pending':
                         conn.execute(text("""
                             UPDATE media_items SET file_status=:st WHERE id=:id
@@ -452,11 +529,12 @@ def _process_movie_files(mount_id, title_id, template, folder_path,
 def catalog_series(mount_id: int, local_path: str,
                    category_id: int, template: dict):
     logger.info(f"Séries — mount {mount_id}")
+    excluded = _excluded_dir_names()
 
     try:
         entries = sorted(
             [e for e in os.scandir(local_path) if e.is_dir()
-             and not e.name.startswith('.') and not e.name.startswith('@') and not e.name.startswith('#')],
+             and not e.name.startswith('.') and e.name.lower() not in excluded],
             key=lambda e: e.stat().st_mtime,
             reverse=True
         )
@@ -524,9 +602,10 @@ def _process_serie_folder(mount_id, category_id, template,
 
 def _process_season_folders(mount_id, title_id, template,
                              serie_folder, serie_path, serie_name):
-    bonus_folders = {'bonus', 'extras', 'featurettes'}
-    special = (template.get('special_folder') or 'S0').lower()
-    exts = get_video_extensions()
+    bonus_folders = _bonus_dir_names()
+    special  = (template.get('special_folder') or 'S0').lower()
+    exts     = get_video_extensions()
+    excluded = _excluded_dir_names()
 
     try:
         entries = sorted(os.scandir(serie_path), key=lambda e: e.name)
@@ -536,10 +615,16 @@ def _process_season_folders(mount_id, title_id, template,
     for entry in entries:
         if not entry.is_dir():
             continue
-        if entry.name.startswith('.') or entry.name.startswith('@') or entry.name.startswith('#'):
+        if entry.name.startswith('.') or entry.name.lower() in excluded:
             continue
         if entry.name.lower() in bonus_folders:
-            logger.debug(f"Bonus ignoré : {entry.path}")
+            # Référencé (poids, présence, navigable) mais sans saison/épisode
+            # ni proposition de renommage — voir _process_episode_files(is_bonus=True)
+            _process_episode_files(
+                mount_id, title_id, template,
+                serie_folder, entry.path, entry.name,
+                serie_name, None, exts, is_bonus=True
+            )
             continue
 
         season_num = extract_season_number(entry.name, special)
@@ -549,10 +634,39 @@ def _process_season_folders(mount_id, title_id, template,
             serie_name, season_num, exts
         )
 
+        # Bonus imbriqué dans la saison (le cas le plus courant en pratique,
+        # ex: 'S09/bonus/...', 'S02/Bonus/...') — même traitement que le bonus
+        # trouvé à la racine série, juste un segment de chemin en plus.
+        try:
+            season_entries = os.scandir(entry.path)
+        except OSError:
+            season_entries = []
+        for sub in season_entries:
+            if sub.is_dir() and sub.name.lower() in bonus_folders:
+                _process_episode_files(
+                    mount_id, title_id, template,
+                    serie_folder, sub.path, f"{entry.name}/{sub.name}",
+                    serie_name, None, exts, is_bonus=True
+                )
+
+    # Fichiers directement à la racine de la série, sans sous-dossier saison
+    # (ex: 'Your Honor/Your Honor - 01x03.mkv') — numéro de saison/épisode
+    # extrait du nom de fichier via extract_season_episode().
+    _process_episode_files(
+        mount_id, title_id, template,
+        serie_folder, serie_path, None,
+        serie_name, None, exts
+    )
+
 
 def _process_episode_files(mount_id, title_id, template,
                             serie_folder, season_path, season_folder,
-                            serie_name, season_num, exts):
+                            serie_name, season_num, exts, is_bonus=False):
+    """season_folder=None : fichiers directement à la racine de la série
+    (pas de sous-dossier saison, ex: 'Your Honor/Your Honor - 01x03.mkv').
+    is_bonus=True : dossier bonus (catalog_bonus_dirs) — référencé (poids,
+    présence, navigable) mais sans saison/épisode ni tentative de renommage,
+    le nom du dossier n'ayant pas vocation à suivre le format série."""
     try:
         entries = sorted(
             os.scandir(season_path),
@@ -563,23 +677,45 @@ def _process_episode_files(mount_id, title_id, template,
         return
 
     for entry in entries:
-        if not entry.is_file():
+        if entry.is_dir():
+            if is_bonus:
+                # Déjà dans le bonus : on descend sans condition — le contenu
+                # peut être organisé en sous-dossiers.
+                sub_folder = f"{season_folder}/{entry.name}" if season_folder else entry.name
+                _process_episode_files(
+                    mount_id, title_id, template,
+                    serie_folder, entry.path, sub_folder,
+                    serie_name, None, exts, is_bonus=True
+                )
             continue
         if Path(entry.name).suffix.lower() not in exts:
             continue
 
-        filename  = entry.name
-        season, episode = extract_season_episode(filename)
-        if season is None and season_num is not None:
-            season = season_num
-        ep_title = extract_episode_title(filename) if (
-            season is not None and episode is not None) else None
-        well_named = (season is not None and episode is not None
-                      and is_clean_episode(filename, template))
+        filename = entry.name
+        multi_range = None if is_bonus else extract_multi_episode_range(filename)
+
+        if is_bonus:
+            season, episode, ep_title, well_named = None, None, None, True
+        elif multi_range:
+            # Fichier multi-épisodes (sortie Blu-ray/DVD groupée) : traité à
+            # part plus bas — un item par épisode, tous sur le même file_id.
+            season, _, _ = multi_range
+            episode  = None
+            ep_title = extract_multi_episode_title(filename)
+            well_named = True  # convention acceptée telle quelle
+        else:
+            season, episode = extract_season_episode(filename)
+            if season is None and season_num is not None:
+                season = season_num
+            ep_title = extract_episode_title(filename) if (
+                season is not None and episode is not None) else None
+            well_named = (season is not None and episode is not None
+                          and is_clean_episode(filename, template))
 
         try:
             with engine.connect() as conn:
-                path_rel = f"{serie_folder}/{season_folder}/{filename}"
+                path_rel = (f"{serie_folder}/{season_folder}/{filename}"
+                            if season_folder else f"{serie_folder}/{filename}")
                 mf = conn.execute(text("""
                     SELECT id FROM media_files
                     WHERE mount_id=:mid AND path_relative=:path
@@ -589,6 +725,36 @@ def _process_episode_files(mount_id, title_id, template,
                     continue
                 file_id = mf[0]
 
+                if multi_range:
+                    _, ep_start, ep_end = multi_range
+                    for ep in range(ep_start, ep_end + 1):
+                        existing_ep = conn.execute(text("""
+                            SELECT id, file_status FROM media_items
+                            WHERE file_id=:fid AND season IS NOT DISTINCT FROM :s AND episode=:e
+                        """), {"fid": file_id, "s": season, "e": ep}).fetchone()
+                        if not existing_ep:
+                            conn.execute(text("""
+                                INSERT INTO media_items
+                                    (title_id, file_id, season, episode,
+                                     episode_title, file_status, is_bonus)
+                                VALUES (:tid, :fid, :s, :e, :et, 'ok', false)
+                            """), {
+                                "tid": title_id, "fid": file_id,
+                                "s": season, "e": ep, "et": ep_title,
+                            })
+                        else:
+                            # Toujours resynchronisé (pas de garde 'pending') : un item
+                            # multi-épisodes n'a jamais de proposition de renommage en jeu,
+                            # et peut avoir été catalogué à tort comme épisode isolé par une
+                            # passe antérieure au support des plages (titre alors corrompu).
+                            conn.execute(text("""
+                                UPDATE media_items
+                                SET is_bonus=false, episode_title=:et, file_status='ok'
+                                WHERE id=:id
+                            """), {"et": ep_title, "id": existing_ep[0]})
+                    conn.commit()
+                    continue
+
                 existing = conn.execute(text(
                     "SELECT id, file_status FROM media_items WHERE file_id=:fid"
                 ), {"fid": file_id}).fetchone()
@@ -597,17 +763,21 @@ def _process_episode_files(mount_id, title_id, template,
                     row = conn.execute(text("""
                         INSERT INTO media_items
                             (title_id, file_id, season, episode,
-                             episode_title, file_status)
-                        VALUES (:tid, :fid, :s, :e, :et, :st)
+                             episode_title, file_status, is_bonus)
+                        VALUES (:tid, :fid, :s, :e, :et, :st, :bonus)
                         RETURNING id
                     """), {
                         "tid": title_id, "fid": file_id,
                         "s": season, "e": episode, "et": ep_title,
-                        "st": 'ok' if well_named else 'to_rename'
+                        "st": 'ok' if well_named else 'to_rename',
+                        "bonus": is_bonus,
                     }).fetchone()
                     item_id = row[0]
                 else:
                     item_id = existing[0]
+                    conn.execute(text(
+                        "UPDATE media_items SET is_bonus=:bonus WHERE id=:id"
+                    ), {"bonus": is_bonus, "id": item_id})
                     if existing[1] == 'pending':
                         conn.execute(text("""
                             UPDATE media_items
@@ -713,7 +883,8 @@ class CatalogQueue:
     def _worker(self):
         time.sleep(8)  # Attendre que la BDD et l'analyze soient prêtes
         while self._running:
-            self._event.wait(timeout=1800)
+            interval_sec = max(60, get_catalog_interval_hours() * 3600)
+            self._event.wait(timeout=interval_sec)
             self._event.clear()
             if not self._running:
                 break

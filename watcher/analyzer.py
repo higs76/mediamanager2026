@@ -20,6 +20,7 @@ from pathlib import Path
 from sqlalchemy import text
 from watcher.database import engine
 from watcher.config_db import get_config
+from watcher.lang_codes import normalize_lang_code, get_language_label
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +86,7 @@ def run_ffprobe(filepath: str) -> dict | None:
 def parse_ffprobe(data: dict) -> dict:
     """
     Extrait les métadonnées utiles du JSON ffprobe.
-    Retourne un dict prêt à insérer dans video_metadata.
+    Retourne un dict structuré (pistes audio/ST/HDR sous forme de listes).
     """
     fmt     = data.get("format", {})
     streams = data.get("streams", [])
@@ -93,20 +94,20 @@ def parse_ffprobe(data: dict) -> dict:
     # ── Flux vidéo (premier trouvé) ───────────────────────────
     video = next((s for s in streams if s.get("codec_type") == "video"), None)
 
-    video_codec   = None
-    video_bitrate = None
-    width = height = None
-    fps           = None
-    hdr_format    = "SDR"
-    color_space   = None
+    video_codec_name = None
+    video_bitrate    = None
+    width = height   = None
+    fps              = None
+    color_space      = None
+    hdr_format_names = []   # liste des formats HDR détectés (vide = SDR)
 
     if video:
-        video_codec = video.get("codec_name")
-        width       = video.get("width")
-        height      = video.get("height")
-        color_space = video.get("color_space")
+        video_codec_name = video.get("codec_name")
+        width            = video.get("width")
+        height           = video.get("height")
+        color_space      = video.get("color_space")
 
-        # Bitrate vidéo — stream, puis tag BPS (Matroska/x265), pas de fallback container
+        # Bitrate — stream puis tag BPS (Matroska/x265)
         if video.get("bit_rate"):
             try:
                 video_bitrate = int(video["bit_rate"])
@@ -130,53 +131,38 @@ def parse_ffprobe(data: dict) -> dict:
             except (ValueError, ZeroDivisionError):
                 pass
 
-        # HDR / Dolby Vision
-        color_transfer = video.get("color_transfer", "")
-        color_primaries = video.get("color_primaries", "")
-        side_data = video.get("side_data_list", [])
+        # HDR — plusieurs formats peuvent coexister (DV+HDR10 très fréquent)
+        color_transfer  = video.get("color_transfer", "")
+        side_data       = video.get("side_data_list", [])
 
         dv = any(
             "DOVI" in str(sd.get("side_data_type", "")) or
             "Dolby Vision" in str(sd.get("side_data_type", ""))
             for sd in side_data
         )
+        hdr10plus = any(
+            "HDR10+" in str(sd.get("side_data_type", ""))
+            for sd in side_data
+        )
+
         if dv:
-            hdr_format = "DV"
-        elif color_transfer in ("smpte2084", "arib-std-b67"):
-            # smpte2084 = PQ (HDR10/HDR10+), arib-std-b67 = HLG
-            # Dolby Vision peut aussi utiliser PQ mais on l'a détecté au-dessus
-            if any(
-                "HDR10+" in str(sd.get("side_data_type", ""))
-                for sd in side_data
-            ):
-                hdr_format = "HDR10+"
-            else:
-                hdr_format = "HDR10"
+            hdr_format_names.append("DV")
+        if hdr10plus:
+            hdr_format_names.append("HDR10+")
+        if color_transfer == "smpte2084":
+            hdr_format_names.append("HDR10")   # couche de base pour DV et HDR10+
         elif color_transfer == "arib-std-b67":
-            hdr_format = "HLG"
-        else:
-            hdr_format = "SDR"
+            hdr_format_names.append("HLG")
+        # Vide = SDR → pas d'entrée dans file_hdr_formats
 
     # ── Flux audio ────────────────────────────────────────────
     audio_streams = [s for s in streams if s.get("codec_type") == "audio"]
+    audio_tracks  = []
 
-    audio_codecs   = []
-    audio_bitrates = []
-    audio_profiles = []
-    audio_langs    = []
-    audio_channels = []
-    audio_layouts  = []
+    for idx, a in enumerate(audio_streams):
+        codec   = a.get("codec_name") or ""
+        profile = a.get("profile") or ""
 
-    for a in audio_streams:
-        codec = a.get("codec_name", "")
-        if codec:
-            audio_codecs.append(codec)
-
-        # Profil (DTS-HD MA, TrueHD Atmos, Dolby Digital+, etc.)
-        profile = a.get("profile", "")
-        audio_profiles.append(profile)
-
-        # Bitrate audio par piste — stream puis tag BPS (Matroska)
         br = None
         if a.get("bit_rate"):
             try:
@@ -190,27 +176,40 @@ def parse_ffprobe(data: dict) -> dict:
                     br = int(bps)
                 except (ValueError, TypeError):
                     pass
-        audio_bitrates.append(str(br) if br is not None else "")
 
-        lang = a.get("tags", {}).get("language", "")
-        if lang:
-            audio_langs.append(lang)
+        lang       = (a.get("tags", {}).get("language") or "").strip().lower()
+        channels   = a.get("channels")
+        layout     = a.get("channel_layout") or ""
+        is_default = bool(a.get("disposition", {}).get("default"))
 
-        ch = a.get("channels")
-        if ch:
-            audio_channels.append(str(ch))
-
-        layout = a.get("channel_layout", "")
-        if layout:
-            audio_layouts.append(layout)
+        audio_tracks.append({
+            "track_order":    idx,
+            "codec_name":     codec or None,
+            "profile":        profile or None,
+            "language_code":  lang[:3] if lang else None,
+            "channels":       int(channels) if channels else None,
+            "layout":         layout or None,
+            "bitrate":        br,
+            "is_default":     is_default,
+        })
 
     # ── Flux sous-titres ──────────────────────────────────────
-    sub_streams = [s for s in streams if s.get("codec_type") == "subtitle"]
-    sub_langs   = []
-    for s in sub_streams:
-        lang = s.get("tags", {}).get("language", "")
-        if lang:
-            sub_langs.append(lang)
+    sub_streams    = [s for s in streams if s.get("codec_type") == "subtitle"]
+    subtitle_tracks = []
+
+    for idx, s in enumerate(sub_streams):
+        lang       = (s.get("tags", {}).get("language") or "").strip().lower()
+        title      = (s.get("tags", {}).get("title") or "").strip() or None
+        is_default = bool(s.get("disposition", {}).get("default"))
+        is_forced  = bool(s.get("disposition", {}).get("forced"))
+
+        subtitle_tracks.append({
+            "track_order":   idx,
+            "language_code": lang[:3] if lang else None,
+            "title":         title,
+            "is_default":    is_default,
+            "is_forced":     is_forced,
+        })
 
     # ── Format global ─────────────────────────────────────────
     duration = None
@@ -221,29 +220,71 @@ def parse_ffprobe(data: dict) -> dict:
             pass
 
     container = fmt.get("format_name", "")
-    # ffprobe retourne parfois "matroska,webm" → on garde le premier
     if "," in container:
         container = container.split(",")[0]
 
     return {
-        "duration_seconds":      duration,
-        "video_codec":           video_codec,
-        "video_bitrate":         video_bitrate,
-        "video_width":           width,
-        "video_height":          height,
-        "video_fps":             fps,
-        "audio_codecs":          ";".join(audio_codecs)    or None,
-        "audio_bitrates":        ";".join(audio_bitrates) or None,
-        "audio_profiles":        ";".join(audio_profiles) or None,
-        "audio_languages":       ";".join(audio_langs)    or None,
-        "audio_channels":        ";".join(audio_channels) or None,
-        "audio_channel_layouts": ";".join(audio_layouts)  or None,
-        "subtitle_languages":    ";".join(sub_langs)     or None,
-        "subtitle_count":        len(sub_streams),
-        "container_format":      container or None,
-        "hdr_format":            hdr_format,
-        "color_space":           color_space,
+        "duration_seconds":  duration,
+        "video_codec_name":  video_codec_name,
+        "video_bitrate":     video_bitrate,
+        "video_width":       width,
+        "video_height":      height,
+        "video_fps":         fps,
+        "container_format":  container or None,
+        "color_space":       color_space,
+        "hdr_format_names":  hdr_format_names,
+        "audio_tracks":      audio_tracks,
+        "subtitle_tracks":   subtitle_tracks,
     }
+
+
+# ─────────────────────────────────────────────────────────────
+# Helpers référentiel
+# ─────────────────────────────────────────────────────────────
+
+def _get_or_create_codec(conn, name: str, codec_type: str) -> int | None:
+    name = (name or "").strip()
+    if not name:
+        return None
+    row = conn.execute(text(
+        "INSERT INTO codecs (name, display_name, codec_type) "
+        "VALUES (:n, :dn, :t) ON CONFLICT (name) DO NOTHING RETURNING id"
+    ), {"n": name, "dn": name.upper(), "t": codec_type}).fetchone()
+    if row:
+        return row[0]
+    return conn.execute(text(
+        "SELECT id FROM codecs WHERE name = :n"
+    ), {"n": name}).fetchone()[0]
+
+
+def _get_or_create_language(conn, code: str) -> int | None:
+    code = normalize_lang_code((code or "").strip().lower())
+    if not code or len(code) > 3:
+        return None
+    row = conn.execute(text(
+        "INSERT INTO languages (code, label) "
+        "VALUES (:c, :l) ON CONFLICT (code) DO NOTHING RETURNING id"
+    ), {"c": code, "l": get_language_label(code)}).fetchone()
+    if row:
+        return row[0]
+    return conn.execute(text(
+        "SELECT id FROM languages WHERE code = :c"
+    ), {"c": code}).fetchone()[0]
+
+
+def _get_or_create_hdr_format(conn, name: str) -> int | None:
+    name = (name or "").strip()
+    if not name:
+        return None
+    row = conn.execute(text(
+        "INSERT INTO hdr_formats (name, display_name) "
+        "VALUES (:n, :dn) ON CONFLICT (name) DO NOTHING RETURNING id"
+    ), {"n": name, "dn": name}).fetchone()
+    if row:
+        return row[0]
+    return conn.execute(text(
+        "SELECT id FROM hdr_formats WHERE name = :n"
+    ), {"n": name}).fetchone()[0]
 
 
 # ─────────────────────────────────────────────────────────────
@@ -252,7 +293,7 @@ def parse_ffprobe(data: dict) -> dict:
 
 def analyze_file(file_id: int, filepath: str) -> bool:
     """
-    Analyse un fichier et insère/met à jour video_metadata.
+    Analyse un fichier et insère/met à jour video_metadata + tables de pistes.
     Retourne True si succès, False sinon.
     """
     data = run_ffprobe(filepath)
@@ -260,65 +301,127 @@ def analyze_file(file_id: int, filepath: str) -> bool:
         return False
 
     meta = parse_ffprobe(data)
-    meta["file_id"]            = file_id
-    meta["file_path_snapshot"] = filepath
 
     try:
         with engine.connect() as conn:
-            # Upsert : si déjà analysé (re-analyse), on met à jour
+
+            # ── Codec vidéo ───────────────────────────────────
+            video_codec_id = _get_or_create_codec(
+                conn, meta["video_codec_name"], "video"
+            )
+
+            # ── Upsert video_metadata ─────────────────────────
+            vm_params = {
+                "file_id":           file_id,
+                "duration_seconds":  meta["duration_seconds"],
+                "video_codec_id":    video_codec_id,
+                "video_bitrate":     meta["video_bitrate"],
+                "video_width":       meta["video_width"],
+                "video_height":      meta["video_height"],
+                "video_fps":         meta["video_fps"],
+                "container_format":  meta["container_format"],
+                "color_space":       meta["color_space"],
+                "file_path_snapshot": filepath,
+            }
+
             existing = conn.execute(text(
-                "SELECT id FROM video_metadata WHERE file_id = :fid"
-            ), {"fid": file_id}).fetchone()
+                "SELECT id FROM video_metadata WHERE file_id = :file_id"
+            ), {"file_id": file_id}).fetchone()
 
             if existing:
                 conn.execute(text("""
                     UPDATE video_metadata SET
-                        duration_seconds      = :duration_seconds,
-                        video_codec           = :video_codec,
-                        video_bitrate         = :video_bitrate,
-                        video_width           = :video_width,
-                        video_height          = :video_height,
-                        video_fps             = :video_fps,
-                        audio_codecs          = :audio_codecs,
-                        audio_bitrates        = :audio_bitrates,
-                        audio_profiles        = :audio_profiles,
-                        audio_languages       = :audio_languages,
-                        audio_channels        = :audio_channels,
-                        audio_channel_layouts = :audio_channel_layouts,
-                        subtitle_languages    = :subtitle_languages,
-                        subtitle_count        = :subtitle_count,
-                        container_format      = :container_format,
-                        hdr_format            = :hdr_format,
-                        color_space           = :color_space,
-                        file_path_snapshot    = :file_path_snapshot,
-                        analyzed_at           = NOW()
+                        duration_seconds   = :duration_seconds,
+                        video_codec_id     = :video_codec_id,
+                        video_bitrate      = :video_bitrate,
+                        video_width        = :video_width,
+                        video_height       = :video_height,
+                        video_fps          = :video_fps,
+                        container_format   = :container_format,
+                        color_space        = :color_space,
+                        file_path_snapshot = :file_path_snapshot,
+                        analyzed_at        = NOW()
                     WHERE file_id = :file_id
-                """), meta)
+                """), vm_params)
             else:
                 conn.execute(text("""
                     INSERT INTO video_metadata (
-                        file_id, duration_seconds, video_codec,
+                        file_id, duration_seconds, video_codec_id,
                         video_bitrate, video_width, video_height, video_fps,
-                        audio_codecs, audio_bitrates, audio_profiles,
-                        audio_languages, audio_channels,
-                        audio_channel_layouts, subtitle_languages,
-                        subtitle_count, container_format, hdr_format,
-                        color_space, file_path_snapshot
+                        container_format, color_space, file_path_snapshot
                     ) VALUES (
-                        :file_id, :duration_seconds, :video_codec,
+                        :file_id, :duration_seconds, :video_codec_id,
                         :video_bitrate, :video_width, :video_height, :video_fps,
-                        :audio_codecs, :audio_bitrates, :audio_profiles,
-                        :audio_languages, :audio_channels,
-                        :audio_channel_layouts, :subtitle_languages,
-                        :subtitle_count, :container_format, :hdr_format,
-                        :color_space, :file_path_snapshot
+                        :container_format, :color_space, :file_path_snapshot
                     )
-                """), meta)
+                """), vm_params)
 
-            # Marquer le fichier comme analysé
-            conn.execute(text("""
-                UPDATE media_files SET status = 'analyzed' WHERE id = :id
-            """), {"id": file_id})
+            # ── Pistes audio (supprime + reinsère pour la re-analyse) ──
+            conn.execute(text(
+                "DELETE FROM audio_tracks WHERE file_id = :fid"
+            ), {"fid": file_id})
+
+            for t in meta["audio_tracks"]:
+                cod_id  = _get_or_create_codec(conn, t["codec_name"], "audio")
+                lang_id = _get_or_create_language(conn, t["language_code"])
+                conn.execute(text("""
+                    INSERT INTO audio_tracks
+                        (file_id, track_order, codec_id, language_id,
+                         profile, channels, layout, bitrate, is_default)
+                    VALUES
+                        (:fid, :order, :codec_id, :lang_id,
+                         :profile, :channels, :layout, :bitrate, :is_default)
+                """), {
+                    "fid":        file_id,
+                    "order":      t["track_order"],
+                    "codec_id":   cod_id,
+                    "lang_id":    lang_id,
+                    "profile":    t["profile"],
+                    "channels":   t["channels"],
+                    "layout":     t["layout"],
+                    "bitrate":    t["bitrate"],
+                    "is_default": t["is_default"],
+                })
+
+            # ── Pistes sous-titres ────────────────────────────
+            conn.execute(text(
+                "DELETE FROM subtitle_tracks WHERE file_id = :fid"
+            ), {"fid": file_id})
+
+            for t in meta["subtitle_tracks"]:
+                lang_id = _get_or_create_language(conn, t["language_code"])
+                conn.execute(text("""
+                    INSERT INTO subtitle_tracks
+                        (file_id, track_order, language_id, title, is_default, is_forced)
+                    VALUES
+                        (:fid, :order, :lang_id, :title, :is_default, :is_forced)
+                """), {
+                    "fid":        file_id,
+                    "order":      t["track_order"],
+                    "lang_id":    lang_id,
+                    "title":      t["title"],
+                    "is_default": t["is_default"],
+                    "is_forced":  t["is_forced"],
+                })
+
+            # ── Formats HDR ───────────────────────────────────
+            conn.execute(text(
+                "DELETE FROM file_hdr_formats WHERE file_id = :fid"
+            ), {"fid": file_id})
+
+            for hdr_name in meta["hdr_format_names"]:
+                hdr_id = _get_or_create_hdr_format(conn, hdr_name)
+                if hdr_id:
+                    conn.execute(text("""
+                        INSERT INTO file_hdr_formats (file_id, hdr_format_id)
+                        VALUES (:fid, :hid)
+                        ON CONFLICT DO NOTHING
+                    """), {"fid": file_id, "hid": hdr_id})
+
+            # ── Marquer comme analysé ─────────────────────────
+            conn.execute(text(
+                "UPDATE media_files SET status = 'analyzed' WHERE id = :id"
+            ), {"id": file_id})
 
             conn.commit()
         return True

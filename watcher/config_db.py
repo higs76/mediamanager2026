@@ -42,3 +42,21 @@ def get_scan_interval_hours() -> float:
         return float(get_config("scan_interval_hours", "6"))
     except ValueError:
         return 6.0
+
+
+def get_ignored_scan_dirs() -> set:
+    """Noms de dossiers à ignorer complètement du scan (ni scannés, ni mesurés).
+    Insensible à la casse. Vide par défaut — ex: dossiers de test."""
+    raw = get_config("scan_excluded_dirs", "")
+    return {d.strip().lower() for d in raw.split(",") if d.strip()}
+
+
+def get_trash_scan_dirs() -> set:
+    """Noms de dossiers reconnus comme corbeilles NAS : mesurés (taille + nb fichiers,
+    espace récupérable) mais jamais catalogués. Insensible à la casse.
+    Défaut : corbeilles Synology, Windows, Linux."""
+    raw = get_config(
+        "scan_trash_dirs",
+        "#recycle,@Recycle,#snapshot,eaRecycleBin,@sharebin,.Trash-1000,$RECYCLE.BIN,RECYCLER",
+    )
+    return {d.strip().lower() for d in raw.split(",") if d.strip()}

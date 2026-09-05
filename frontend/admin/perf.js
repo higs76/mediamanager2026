@@ -43,8 +43,8 @@ const Perf = (() => {
     tbody.innerHTML = summary.map(r => {
       const cls = r.avg_ms > 500 ? 'perf-slow' : r.avg_ms > 100 ? 'perf-warn' : '';
       return `<tr class="${cls}">
-        <td>${_esc(r.endpoint)}</td>
-        <td>${_esc(r.name)}</td>
+        <td>${escHtml(r.endpoint)}</td>
+        <td>${escHtml(r.name)}</td>
         <td>${r.calls}</td>
         <td>${r.avg_ms} ms</td>
         <td>${r.max_ms} ms</td>
@@ -65,16 +65,12 @@ const Perf = (() => {
       const cls = r.duration_ms > 500 ? 'perf-slow' : r.duration_ms > 100 ? 'perf-warn' : '';
       return `<tr class="${cls}">
         <td class="perf-ts">${r.ts}</td>
-        <td>${_esc(r.endpoint)}</td>
-        <td>${_esc(r.name)}</td>
+        <td>${escHtml(r.endpoint)}</td>
+        <td>${escHtml(r.name)}</td>
         <td>${r.duration_ms} ms</td>
         <td>${r.row_count}</td>
       </tr>`;
     }).join('');
-  }
-
-  function _esc(s) {
-    return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   }
 
   return { load, clear };

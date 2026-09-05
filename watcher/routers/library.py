@@ -53,13 +53,17 @@ def library_categories_stats():
         with engine.connect() as conn:
             cats = conn.execute(text("""
                 SELECT c.id, c.name, c.has_seasons,
-                       COUNT(DISTINCT mt.id)  as title_count,
+                       COUNT(DISTINCT mt.id) FILTER (WHERE mi.id IS NOT NULL) as title_count,
                        COUNT(DISTINCT mi.id)  as file_count,
                        ROUND(SUM(mf.size_bytes)/1099511627776::numeric, 2) as total_tb
                 FROM categories c
                 LEFT JOIN mounts m    ON m.category_id = c.id
                 LEFT JOIN media_titles mt ON mt.mount_id = m.id
+                -- Seuls les fichiers présents comptent (exclut manquants/doublons résiduels,
+                -- notamment le contenu de corbeille NAS purgé de media_files)
                 LEFT JOIN media_items  mi ON mi.title_id = mt.id
+                    AND EXISTS (SELECT 1 FROM media_files mfp
+                                WHERE mfp.id = mi.file_id AND mfp.disk_status = 'present')
                 LEFT JOIN media_files  mf ON mf.id = mi.file_id
                 GROUP BY c.id, c.name, c.has_seasons
                 ORDER BY c.name
@@ -93,12 +97,13 @@ def library_categories_stats():
 
                 _t = _time.perf_counter()
                 cod_rows = conn.execute(text("""
-                    SELECT vm.video_codec, COUNT(*) as cnt
+                    SELECT c.name as video_codec, COUNT(*) as cnt
                     FROM video_metadata vm
+                    JOIN codecs c ON c.id = vm.video_codec_id
                     JOIN media_files mf ON mf.id = vm.file_id
                     JOIN mounts m ON m.id = mf.mount_id
-                    WHERE m.category_id = :cid AND vm.video_codec IS NOT NULL
-                    GROUP BY vm.video_codec ORDER BY cnt DESC LIMIT 5
+                    WHERE m.category_id = :cid AND vm.video_codec_id IS NOT NULL
+                    GROUP BY c.name ORDER BY cnt DESC LIMIT 5
                 """), {"cid": cat_id}).mappings().fetchall()
                 _perf("categories_stats", "cod_per_cat", (_time.perf_counter() - _t) * 1000, len(cod_rows))
 
@@ -133,6 +138,19 @@ def library_titles(category_id: int, limit: int = 50, offset: int = 0, search: s
                 search_clause    = "AND mt.display_name ILIKE :search"
                 params["search"] = f"%{search}%"
 
+            # COUNT séparé — ne compte que les titres ayant au moins un fichier présent
+            # (exclut les titres orphelins, ex: résidus de dossiers corbeille)
+            count_row   = conn.execute(text(f"""
+                SELECT COUNT(*) FROM media_titles mt
+                WHERE mt.category_id = :cat {search_clause}
+                  AND EXISTS (
+                      SELECT 1 FROM media_items mi3
+                      JOIN media_files mf3 ON mf3.id = mi3.file_id
+                      WHERE mi3.title_id = mt.id AND mf3.disk_status = 'present'
+                  )
+            """), params).fetchone()
+            total_count = count_row[0] if count_row else 0
+
             _t = _time.perf_counter()
             rows = conn.execute(text(f"""
                 WITH pending_proposals AS (
@@ -150,11 +168,12 @@ def library_titles(category_id: int, limit: int = 50, offset: int = 0, search: s
                        COALESCE(pp.cnt, 0)                       AS proposals,
                        COUNT(DISTINCT mi.id)
                            FILTER (WHERE mi.watched = true)      AS watched_count,
-                       ROUND(SUM(mf.size_bytes)/1073741824::numeric, 2) AS size_gb,
-                       COUNT(*) OVER()                           AS total_count
+                       ROUND(SUM(mf.size_bytes)/1073741824::numeric, 2) AS size_gb
                 FROM media_titles mt
-                LEFT JOIN media_items mi ON mi.title_id = mt.id
-                LEFT JOIN media_files  mf ON mf.id = mi.file_id
+                -- Seuls les fichiers présents sont catalogués côté utilisateur
+                -- (exclut manquants/doublons/résidus corbeille)
+                JOIN media_items mi ON mi.title_id = mt.id
+                JOIN media_files  mf ON mf.id = mi.file_id AND mf.disk_status = 'present'
                 LEFT JOIN pending_proposals pp ON pp.title_id = mt.id
                 WHERE mt.category_id = :cat {search_clause}
                 GROUP BY mt.id, mt.folder_name, mt.display_name,
@@ -163,8 +182,6 @@ def library_titles(category_id: int, limit: int = 50, offset: int = 0, search: s
                 LIMIT :limit OFFSET :offset
             """), params).mappings().fetchall()
             _perf("library_titles", "main", (_time.perf_counter() - _t) * 1000, len(rows))
-
-            total_count = rows[0]["total_count"] if rows else 0
 
             if not rows:
                 return JSONResponse({"items": [], "total": 0, "offset": offset, "limit": limit})
@@ -183,14 +200,15 @@ def library_titles(category_id: int, limit: int = 50, offset: int = 0, search: s
                         WHEN vm.video_width IS NOT NULL OR vm.video_height IS NOT NULL THEN 'SD'
                         ELSE NULL
                     END as res_label,
-                    vm.video_codec,
+                    c.name as video_codec,
                     COUNT(*) as cnt
                 FROM media_items mi
                 JOIN media_files mf ON mf.id = mi.file_id
                 JOIN video_metadata vm ON vm.file_id = mf.id
-                WHERE mi.title_id = ANY(:ids)
-                  AND (vm.video_width IS NOT NULL OR vm.video_height IS NOT NULL OR vm.video_codec IS NOT NULL)
-                GROUP BY mi.title_id, res_label, vm.video_codec
+                LEFT JOIN codecs c ON c.id = vm.video_codec_id
+                WHERE mi.title_id = ANY(:ids) AND mi.is_bonus = false
+                  AND (vm.video_width IS NOT NULL OR vm.video_height IS NOT NULL OR vm.video_codec_id IS NOT NULL)
+                GROUP BY mi.title_id, res_label, c.name
             """), {"ids": page_ids}).mappings().fetchall()
             _perf("library_titles", "vm_stats", (_time.perf_counter() - _t) * 1000, len(vm_rows))
 
@@ -265,24 +283,31 @@ def library_title_detail(title_id: int):
 
             items = conn.execute(text("""
                 SELECT mi.id, mi.season, mi.episode, mi.episode_title,
-                       mi.file_status, mi.watched,
+                       mi.file_status, mi.watched, mi.is_bonus,
                        mf.filename, mf.size_bytes,
-                       vm.video_codec, vm.video_width, vm.video_height, vm.hdr_format,
+                       c.name as video_codec, vm.video_width, vm.video_height,
+                       (SELECT STRING_AGG(hf.name, '+' ORDER BY hf.id)
+                        FROM file_hdr_formats fhf
+                        JOIN hdr_formats hf ON hf.id = fhf.hdr_format_id
+                        WHERE fhf.file_id = mf.id) as hdr_formats,
                        vm.duration_seconds,
                        rp.proposed_name, rp.status as prop_status, rp.id as prop_id
                 FROM media_items mi
                 JOIN media_files mf ON mf.id = mi.file_id
                 LEFT JOIN video_metadata vm ON vm.file_id = mf.id
+                LEFT JOIN codecs c ON c.id = vm.video_codec_id
                 LEFT JOIN rename_proposals rp ON rp.item_id = mi.id
                     AND rp.status = 'pending'
-                WHERE mi.title_id = :tid
+                WHERE mi.title_id = :tid AND mf.disk_status = 'present'
                 ORDER BY mi.season NULLS LAST, mi.episode NULLS LAST
             """), {"tid": title_id}).mappings().fetchall()
 
-        # Grouper par saison + calculer stats par saison
+        # Grouper par saison + calculer stats par saison.
+        # Le bonus a sa propre clé ("bonus") — distincte des vraies saisons ET
+        # des épisodes sans saison connue (None), pour ne pas les mélanger.
         seasons: dict = {}
         for r in items:
-            s = r["season"]
+            s = "bonus" if r["is_bonus"] else r["season"]
             if s not in seasons:
                 seasons[s] = {"items": [], "res": {}, "cod": {}, "size": 0, "watched": 0}
 
@@ -293,11 +318,12 @@ def library_title_detail(title_id: int):
                 "episode_title": r["episode_title"],
                 "file_status":   r["file_status"],
                 "watched":       r["watched"],
+                "is_bonus":      r["is_bonus"],
                 "filename":      r["filename"],
                 "size_bytes":    r["size_bytes"],
                 "codec":         r["video_codec"],
                 "height":        r["video_height"],
-                "hdr":           r["hdr_format"],
+                "hdr":           r["hdr_formats"],
                 "duration":      r["duration_seconds"],
                 "proposed_name": r["proposed_name"],
                 "prop_status":   r["prop_status"],
@@ -322,6 +348,18 @@ def library_title_detail(title_id: int):
             top   = sorted(d.items(), key=lambda x: -x[1])[:limit]
             return [{"label": k, "pct": round(v / total * 100)} for k, v in top]
 
+        def _season_sort_key(s):
+            if isinstance(s, int):
+                return (0, s)
+            if s is None:
+                return (1, 0)
+            return (2, 0)  # "bonus" — toujours en dernier
+
+        def _season_json_key(s):
+            # str(None) donnerait "None" (Python) au lieu de "null" (JSON) —
+            # le frontend teste explicitement la chaîne "null".
+            return "null" if s is None else str(s)
+
         seasons_out:   dict = {}
         all_res:       dict = {}
         all_cod:       dict = {}
@@ -329,9 +367,9 @@ def library_title_detail(title_id: int):
         total_watched  = 0
         total_items    = 0
 
-        for s, data in sorted(seasons.items(), key=lambda x: (x[0] is None, x[0])):
+        for s, data in sorted(seasons.items(), key=lambda x: _season_sort_key(x[0])):
             n = len(data["items"])
-            seasons_out[str(s)] = {
+            seasons_out[_season_json_key(s)] = {
                 "items":       data["items"],
                 "file_count":  n,
                 "watched_pct": round(data["watched"] / n * 100) if n else 0,
@@ -339,10 +377,14 @@ def library_title_detail(title_id: int):
                 "resolutions": _pct_list(data["res"]),
                 "codecs":      _pct_list(data["cod"]),
             }
-            for k, v in data["res"].items():
-                all_res[k] = all_res.get(k, 0) + v
-            for k, v in data["cod"].items():
-                all_cod[k] = all_cod.get(k, 0) + v
+            # Le bonus compte pour le poids/présence globaux mais ne dilue pas
+            # la répartition qualité affichée en tête (souvent en résolution
+            # bien plus faible que le contenu principal).
+            if s != "bonus":
+                for k, v in data["res"].items():
+                    all_res[k] = all_res.get(k, 0) + v
+                for k, v in data["cod"].items():
+                    all_cod[k] = all_cod.get(k, 0) + v
             total_size    += data["size"]
             total_watched += data["watched"]
             total_items   += n
@@ -451,12 +493,17 @@ def library_proposals_detail(title_id: int):
                 SELECT rp.id, rp.current_name, rp.proposed_name, rp.status,
                        mi.season, mi.episode, mi.episode_title, mi.id as item_id,
                        mf.filename, mf.size_bytes,
-                       vm.video_codec, vm.video_height, vm.hdr_format
+                       c.name as video_codec, vm.video_height,
+                       (SELECT STRING_AGG(hf.name, '+' ORDER BY hf.id)
+                        FROM file_hdr_formats fhf
+                        JOIN hdr_formats hf ON hf.id = fhf.hdr_format_id
+                        WHERE fhf.file_id = mf.id) as hdr_formats
                 FROM media_items mi
                 JOIN rename_proposals rp ON rp.item_id = mi.id
                     AND rp.status = 'pending'
                 JOIN media_files mf ON mf.id = mi.file_id
                 LEFT JOIN video_metadata vm ON vm.file_id = mf.id
+                LEFT JOIN codecs c ON c.id = vm.video_codec_id
                 WHERE mi.title_id = :tid
                 ORDER BY mi.season NULLS LAST, mi.episode NULLS LAST
             """), {"tid": title_id}).mappings().fetchall()
@@ -479,7 +526,7 @@ def library_proposals_detail(title_id: int):
                 "size_bytes":    r["size_bytes"],
                 "codec":         r["video_codec"],
                 "height":        r["video_height"],
-                "hdr":           r["hdr_format"],
+                "hdr":           r["hdr_formats"],
             })
 
         tpl = {
@@ -600,8 +647,8 @@ def library_item_detail(item_id: int):
                     mt.id            AS title_id,
                     mt.display_name  AS title_name,
                     mt.folder_name   AS folder_name,
-                    c.name           AS category,
-                    c.has_seasons    AS has_seasons,
+                    cat.name         AS category,
+                    cat.has_seasons  AS has_seasons,
                     mf.id            AS file_id,
                     mf.filename      AS filename,
                     mf.path_relative AS path_relative,
@@ -609,31 +656,23 @@ def library_item_detail(item_id: int):
                     mf.extension     AS extension,
                     mf.disk_status   AS disk_status,
                     vm.duration_seconds AS duration_seconds,
-                    vm.video_codec      AS video_codec,
+                    vc.name             AS video_codec,
                     vm.video_bitrate    AS video_bitrate,
                     vm.video_width      AS video_width,
                     vm.video_height     AS video_height,
                     vm.video_fps        AS video_fps,
-                    vm.audio_codecs           AS audio_codecs,
-                    vm.audio_bitrates         AS audio_bitrates,
-                    vm.audio_profiles         AS audio_profiles,
-                    vm.audio_languages        AS audio_languages,
-                    vm.audio_channels         AS audio_channels,
-                    vm.audio_channel_layouts  AS audio_channel_layouts,
-                    vm.subtitle_languages     AS subtitle_languages,
-                    vm.subtitle_count         AS subtitle_count,
-                    vm.container_format       AS container_format,
-                    vm.hdr_format             AS hdr_format,
-                    vm.color_space            AS color_space,
+                    vm.container_format AS container_format,
+                    vm.color_space      AS color_space,
                     rp.id            AS prop_id,
                     rp.proposed_name AS proposed_name,
                     rp.status        AS prop_status
                 FROM media_items mi
-                JOIN media_titles mt ON mt.id = mi.title_id
-                JOIN mounts m ON m.id = mt.mount_id
-                JOIN categories c ON c.id = m.category_id
-                JOIN media_files mf ON mf.id = mi.file_id
+                JOIN media_titles mt  ON mt.id = mi.title_id
+                JOIN mounts m         ON m.id = mt.mount_id
+                JOIN categories cat   ON cat.id = m.category_id
+                JOIN media_files mf   ON mf.id = mi.file_id
                 LEFT JOIN video_metadata vm ON vm.file_id = mf.id
+                LEFT JOIN codecs vc          ON vc.id = vm.video_codec_id
                 LEFT JOIN rename_proposals rp ON rp.item_id = mi.id
                     AND rp.status = 'pending'
                 WHERE mi.id = :id
@@ -642,8 +681,36 @@ def library_item_detail(item_id: int):
             if not row:
                 raise HTTPException(404, "Fichier introuvable")
 
-        def split_semi(val):
-            return [x for x in (val or "").split(";") if x]
+            file_id = row["file_id"]
+
+            audio_rows = conn.execute(text("""
+                SELECT at.track_order, c.name as codec_name, at.profile,
+                       l.code as lang_code, l.label as lang_label,
+                       at.channels, at.layout,
+                       at.bitrate, at.is_default
+                FROM audio_tracks at
+                LEFT JOIN codecs c    ON c.id = at.codec_id
+                LEFT JOIN languages l ON l.id = at.language_id
+                WHERE at.file_id = :fid
+                ORDER BY at.track_order
+            """), {"fid": file_id}).mappings().fetchall()
+
+            sub_rows = conn.execute(text("""
+                SELECT st.track_order, l.code as lang_code, l.label as lang_label,
+                       st.title, st.is_default, st.is_forced
+                FROM subtitle_tracks st
+                LEFT JOIN languages l ON l.id = st.language_id
+                WHERE st.file_id = :fid
+                ORDER BY st.track_order
+            """), {"fid": file_id}).mappings().fetchall()
+
+            hdr_rows = conn.execute(text("""
+                SELECT hf.name, hf.display_name
+                FROM file_hdr_formats fhf
+                JOIN hdr_formats hf ON hf.id = fhf.hdr_format_id
+                WHERE fhf.file_id = :fid
+                ORDER BY hf.id
+            """), {"fid": file_id}).mappings().fetchall()
 
         def audio_format_label(codec: str, profile: str) -> str:
             c = (codec or "").lower()
@@ -668,15 +735,6 @@ def library_item_detail(item_id: int):
             if c.startswith("pcm"): return "PCM"
             return c.upper()
 
-        codecs   = split_semi(row["audio_codecs"])
-        bitrates = split_semi(row["audio_bitrates"])
-        profiles = split_semi(row["audio_profiles"])
-        formats  = [
-            audio_format_label(codecs[i] if i < len(codecs) else "",
-                               profiles[i] if i < len(profiles) else "")
-            for i in range(len(codecs))
-        ]
-
         return JSONResponse({
             "item_id":       row["item_id"],
             "season":        row["season"],
@@ -690,7 +748,7 @@ def library_item_detail(item_id: int):
             "folder_name":   row["folder_name"],
             "category":      row["category"],
             "has_seasons":   row["has_seasons"],
-            "file_id":       row["file_id"],
+            "file_id":       file_id,
             "filename":      row["filename"],
             "path_relative": row["path_relative"],
             "size_bytes":    row["size_bytes"],
@@ -704,20 +762,38 @@ def library_item_detail(item_id: int):
                 "height":           row["video_height"],
                 "fps":              row["video_fps"],
                 "container":        row["container_format"],
-                "hdr_format":       row["hdr_format"],
+                "hdr_formats":      [r["display_name"] for r in hdr_rows],
                 "color_space":      row["color_space"],
             },
             "audio": {
-                "codecs":    codecs,
-                "formats":   formats,
-                "bitrates":  [int(b) if b else None for b in bitrates],
-                "languages": split_semi(row["audio_languages"]),
-                "channels":  split_semi(row["audio_channels"]),
-                "layouts":   split_semi(row["audio_channel_layouts"]),
+                "tracks": [
+                    {
+                        "order":      r["track_order"],
+                        "codec":      r["codec_name"],
+                        "format":     audio_format_label(r["codec_name"] or "", r["profile"] or ""),
+                        "lang":       r["lang_code"],
+                        "lang_label": r["lang_label"],
+                        "channels":   r["channels"],
+                        "layout":     r["layout"],
+                        "bitrate":    r["bitrate"],
+                        "is_default": r["is_default"],
+                    }
+                    for r in audio_rows
+                ],
             },
             "subtitles": {
-                "languages": split_semi(row["subtitle_languages"]),
-                "count":     row["subtitle_count"] or 0,
+                "tracks": [
+                    {
+                        "order":      r["track_order"],
+                        "lang":       r["lang_code"],
+                        "label":      r["lang_label"],
+                        "title":      r["title"],
+                        "is_default": r["is_default"],
+                        "is_forced":  r["is_forced"],
+                    }
+                    for r in sub_rows
+                ],
+                "count": len(sub_rows),
             },
             "proposal": {
                 "prop_id":       row["prop_id"],
@@ -729,6 +805,380 @@ def library_item_detail(item_id: int):
         raise
     except Exception as e:
         logger.error(f"library_item_detail: {e}")
+        raise HTTPException(500, str(e))
+
+
+@router.post("/library/reanalyze")
+def reanalyze_files(data: dict = Body(default={})):
+    """Force la ré-analyse de fichiers déjà analysés : reset status='discovered'
+    et supprime les métadonnées extraites (bitrate, pistes, HDR...) pour que
+    l'AnalyzeQueue les retraite depuis zéro avec la logique d'extraction actuelle.
+    cat_id absent → toute la bibliothèque."""
+    cat_id = data.get("cat_id")
+    try:
+        with engine.connect() as conn:
+            params   = {}
+            cat_join = ""
+            if cat_id:
+                cat_join         = "JOIN mounts m ON m.id = mf.mount_id AND m.category_id = :cat_id"
+                params["cat_id"] = cat_id
+
+            rows = conn.execute(text(f"""
+                SELECT mf.id FROM media_files mf
+                {cat_join}
+                WHERE mf.status = 'analyzed'
+            """), params).fetchall()
+            file_ids = [r[0] for r in rows]
+
+            if file_ids:
+                conn.execute(text(
+                    "UPDATE media_files SET status = 'discovered' WHERE id = ANY(:ids)"
+                ), {"ids": file_ids})
+                conn.execute(text(
+                    "DELETE FROM video_metadata WHERE file_id = ANY(:ids)"
+                ), {"ids": file_ids})
+                conn.execute(text(
+                    "DELETE FROM audio_tracks WHERE file_id = ANY(:ids)"
+                ), {"ids": file_ids})
+                conn.execute(text(
+                    "DELETE FROM subtitle_tracks WHERE file_id = ANY(:ids)"
+                ), {"ids": file_ids})
+                conn.execute(text(
+                    "DELETE FROM file_hdr_formats WHERE file_id = ANY(:ids)"
+                ), {"ids": file_ids})
+                conn.commit()
+
+        if file_ids:
+            from watcher.analyzer import analyze_queue
+            analyze_queue.trigger()
+
+        logger.info(f"Ré-analyse déclenchée : {len(file_ids)} fichier(s) (cat_id={cat_id})")
+        return JSONResponse({"success": True, "reset_count": len(file_ids)})
+    except Exception as e:
+        logger.error(f"reanalyze_files: {e}")
+        raise HTTPException(500, str(e))
+
+
+@router.post("/library/clean-missing")
+def clean_missing_files(data: dict = Body(default={})):
+    """Supprime définitivement les fichiers marqués 'manquant' (disparus du NAS).
+    Cascade sur video_metadata/audio_tracks/subtitle_tracks/media_items/
+    rename_proposals via ON DELETE CASCADE. cat_id absent → toute la bibliothèque."""
+    cat_id = data.get("cat_id")
+    try:
+        with engine.connect() as conn:
+            params   = {}
+            cat_join = ""
+            if cat_id:
+                cat_join         = "JOIN mounts m ON m.id = mf.mount_id AND m.category_id = :cat_id"
+                params["cat_id"] = cat_id
+
+            rows = conn.execute(text(f"""
+                SELECT mf.id FROM media_files mf
+                {cat_join}
+                WHERE mf.disk_status = 'missing'
+            """), params).fetchall()
+            file_ids = [r[0] for r in rows]
+
+            if file_ids:
+                conn.execute(text(
+                    "DELETE FROM media_files WHERE id = ANY(:ids)"
+                ), {"ids": file_ids})
+                conn.commit()
+
+        logger.info(f"Nettoyage manquants : {len(file_ids)} fichier(s) supprimé(s) (cat_id={cat_id})")
+        return JSONResponse({"success": True, "deleted_count": len(file_ids)})
+    except Exception as e:
+        logger.error(f"clean_missing_files: {e}")
+        raise HTTPException(500, str(e))
+
+
+@router.get("/library/trash")
+def library_trash(cat_id: int = None):
+    """Dossiers corbeille NAS détectés (ex: #recycle) avec taille — espace récupérable."""
+    try:
+        with engine.connect() as conn:
+            params   = {"cat_id": cat_id} if cat_id else {}
+            cat_join = (
+                "JOIN mounts m ON m.id = tf.mount_id AND m.category_id = :cat_id"
+            ) if cat_id else "JOIN mounts m ON m.id = tf.mount_id"
+
+            rows = conn.execute(text(f"""
+                SELECT tf.id, tf.path_relative, tf.size_bytes, tf.file_count,
+                       tf.last_seen_at, m.local_path, c.name AS category
+                FROM trash_folders tf
+                {cat_join}
+                JOIN categories c ON c.id = m.category_id
+                ORDER BY tf.size_bytes DESC
+            """), params).mappings().fetchall()
+
+        total_bytes = sum(r["size_bytes"] for r in rows)
+        total_files = sum(r["file_count"] for r in rows)
+
+        return JSONResponse({
+            "total_bytes": total_bytes,
+            "total_files": total_files,
+            "folders": [{
+                "id":           r["id"],
+                "path":         r["path_relative"],
+                "size_bytes":   r["size_bytes"],
+                "file_count":   r["file_count"],
+                "category":     r["category"],
+                "last_seen_at": str(r["last_seen_at"]) if r["last_seen_at"] else None,
+            } for r in rows],
+        })
+    except Exception as e:
+        logger.error(f"library_trash: {e}")
+        raise HTTPException(500, str(e))
+
+
+@router.get("/library/filter-options")
+def library_filter_options(cat_id: int = None):
+    """Options de filtrage disponibles avec compteurs (résolution, codec, HDR, langues)."""
+    try:
+        with engine.connect() as conn:
+            params   = {"cat_id": cat_id} if cat_id else {}
+            cat_join = (
+                "JOIN mounts mc ON mc.id = mf.mount_id AND mc.category_id = :cat_id"
+            ) if cat_id else ""
+
+            res_rows = conn.execute(text(f"""
+                SELECT
+                    CASE WHEN vm.video_height >= 2160 THEN '4K'
+                         WHEN vm.video_height >= 1080 THEN '1080p'
+                         WHEN vm.video_height >= 720  THEN '720p'
+                         ELSE 'SD' END AS label,
+                    COUNT(*) AS cnt
+                FROM video_metadata vm
+                JOIN media_files mf ON mf.id = vm.file_id
+                {cat_join}
+                WHERE mf.status = 'analyzed' AND vm.video_height IS NOT NULL
+                GROUP BY label ORDER BY cnt DESC
+            """), params).mappings().fetchall()
+
+            codec_rows = conn.execute(text(f"""
+                SELECT c.name, c.display_name, COUNT(DISTINCT vm.file_id) AS cnt
+                FROM codecs c
+                JOIN video_metadata vm ON vm.video_codec_id = c.id
+                JOIN media_files mf ON mf.id = vm.file_id
+                {cat_join}
+                WHERE mf.status = 'analyzed' AND c.codec_type = 'video'
+                GROUP BY c.name, c.display_name ORDER BY cnt DESC
+            """), params).mappings().fetchall()
+
+            hdr_rows = conn.execute(text(f"""
+                SELECT hf.name, hf.display_name, COUNT(DISTINCT fhf.file_id) AS cnt
+                FROM hdr_formats hf
+                JOIN file_hdr_formats fhf ON fhf.hdr_format_id = hf.id
+                JOIN media_files mf ON mf.id = fhf.file_id
+                {cat_join}
+                WHERE mf.status = 'analyzed'
+                GROUP BY hf.name, hf.display_name ORDER BY cnt DESC
+            """), params).mappings().fetchall()
+
+            audio_lang_rows = conn.execute(text(f"""
+                SELECT l.code, l.label, COUNT(DISTINCT at.file_id) AS cnt
+                FROM languages l
+                JOIN audio_tracks at ON at.language_id = l.id
+                JOIN media_files mf ON mf.id = at.file_id
+                {cat_join}
+                WHERE mf.status = 'analyzed'
+                GROUP BY l.code, l.label ORDER BY cnt DESC
+                LIMIT 20
+            """), params).mappings().fetchall()
+
+            sub_lang_rows = conn.execute(text(f"""
+                SELECT l.code, l.label, COUNT(DISTINCT st.file_id) AS cnt
+                FROM languages l
+                JOIN subtitle_tracks st ON st.language_id = l.id
+                JOIN media_files mf ON mf.id = st.file_id
+                {cat_join}
+                WHERE mf.status = 'analyzed'
+                GROUP BY l.code, l.label ORDER BY cnt DESC
+                LIMIT 20
+            """), params).mappings().fetchall()
+
+            cat_rows = conn.execute(text("""
+                SELECT c.id, c.name, COUNT(DISTINCT mf.id) AS cnt
+                FROM categories c
+                LEFT JOIN mounts m  ON m.category_id = c.id
+                LEFT JOIN media_files mf ON mf.mount_id = m.id AND mf.status = 'analyzed'
+                GROUP BY c.id, c.name ORDER BY c.name
+            """)).mappings().fetchall()
+
+            status_rows = conn.execute(text(f"""
+                SELECT mf.disk_status, COUNT(*) AS cnt
+                FROM media_files mf
+                JOIN video_metadata vm ON vm.file_id = mf.id
+                {cat_join}
+                WHERE mf.status = 'analyzed' AND mf.disk_status != 'present'
+                GROUP BY mf.disk_status ORDER BY cnt DESC
+            """), params).mappings().fetchall()
+
+        _status_labels = {"missing": "Manquant", "duplicate": "Doublon"}
+
+        return JSONResponse({
+            "resolutions":  [{"label": r["label"], "count": r["cnt"]} for r in res_rows],
+            "codecs":       [{"name": r["name"], "label": (r["display_name"] or r["name"]).upper(), "count": r["cnt"]} for r in codec_rows],
+            "hdr":          [{"name": r["name"], "label": r["display_name"] or r["name"], "count": r["cnt"]} for r in hdr_rows],
+            "langs_audio":  [{"code": r["code"], "label": r["label"], "count": r["cnt"]} for r in audio_lang_rows],
+            "langs_sub":    [{"code": r["code"], "label": r["label"], "count": r["cnt"]} for r in sub_lang_rows],
+            "categories":   [{"id": r["id"], "name": r["name"], "count": r["cnt"]} for r in cat_rows],
+            "disk_statuses": [{"name": r["disk_status"], "label": _status_labels.get(r["disk_status"], r["disk_status"]), "count": r["cnt"]} for r in status_rows],
+        })
+    except Exception as e:
+        logger.error(f"library_filter_options: {e}")
+        raise HTTPException(500, str(e))
+
+
+@router.get("/library/files")
+def library_files(
+    cat_id:        int = None,
+    codecs:        str = None,
+    resolutions:   str = None,
+    hdr:           str = None,
+    langs_audio:   str = None,
+    langs_sub:     str = None,
+    disk_statuses: str = None,
+    page:          int = 1,
+    limit:         int = 50,
+):
+    """Liste paginée de fichiers avec filtres cumulatifs (AND entre dimensions, OR dans une dimension)."""
+    limit  = min(limit, 200)
+    offset = (max(1, page) - 1) * limit
+
+    try:
+        with engine.connect() as conn:
+            conditions = ["mf.status = 'analyzed'"]
+            params     = {"limit": limit, "offset": offset}
+
+            cat_join = ""
+            if cat_id:
+                cat_join         = "JOIN mounts mc ON mc.id = mf.mount_id AND mc.category_id = :cat_id"
+                params["cat_id"] = cat_id
+
+            if codecs:
+                lst = [v.strip() for v in codecs.split(",") if v.strip()]
+                if lst:
+                    conditions.append("c.name = ANY(:codecs)")
+                    params["codecs"] = lst
+
+            if resolutions:
+                lst = [v.strip() for v in resolutions.split(",") if v.strip()]
+                if lst:
+                    conditions.append(
+                        "CASE WHEN vm.video_height >= 2160 THEN '4K' "
+                        "     WHEN vm.video_height >= 1080 THEN '1080p' "
+                        "     WHEN vm.video_height >= 720  THEN '720p' "
+                        "     ELSE 'SD' END = ANY(:resolutions)"
+                    )
+                    params["resolutions"] = lst
+
+            if hdr:
+                lst = [v.strip() for v in hdr.split(",") if v.strip()]
+                if lst:
+                    conditions.append(
+                        "EXISTS (SELECT 1 FROM file_hdr_formats fhf2 "
+                        "JOIN hdr_formats hf2 ON hf2.id = fhf2.hdr_format_id "
+                        "WHERE fhf2.file_id = mf.id AND hf2.name = ANY(:hdr))"
+                    )
+                    params["hdr"] = lst
+
+            if langs_audio:
+                lst = [v.strip() for v in langs_audio.split(",") if v.strip()]
+                if lst:
+                    conditions.append(
+                        "EXISTS (SELECT 1 FROM audio_tracks at2 "
+                        "JOIN languages la2 ON la2.id = at2.language_id "
+                        "WHERE at2.file_id = mf.id AND la2.code = ANY(:langs_audio))"
+                    )
+                    params["langs_audio"] = lst
+
+            if langs_sub:
+                lst = [v.strip() for v in langs_sub.split(",") if v.strip()]
+                if lst:
+                    conditions.append(
+                        "EXISTS (SELECT 1 FROM subtitle_tracks st2 "
+                        "JOIN languages ls2 ON ls2.id = st2.language_id "
+                        "WHERE st2.file_id = mf.id AND ls2.code = ANY(:langs_sub))"
+                    )
+                    params["langs_sub"] = lst
+
+            if disk_statuses:
+                lst = [v.strip() for v in disk_statuses.split(",") if v.strip()]
+                if lst:
+                    conditions.append("mf.disk_status = ANY(:disk_statuses)")
+                    params["disk_statuses"] = lst
+
+            where    = " AND ".join(conditions)
+            base_sql = f"""
+                FROM media_files mf
+                JOIN video_metadata vm ON vm.file_id = mf.id
+                LEFT JOIN codecs c ON c.id = vm.video_codec_id
+                {cat_join}
+                WHERE {where}
+            """
+
+            total = conn.execute(
+                text(f"SELECT COUNT(*) {base_sql}"), params
+            ).fetchone()[0]
+
+            rows = conn.execute(text(f"""
+                SELECT
+                    mf.id, mf.filename, mf.path_relative, mf.size_bytes, mf.disk_status,
+                    c.name AS video_codec,
+                    vm.video_height, vm.duration_seconds,
+                    (SELECT STRING_AGG(hf.name, '+' ORDER BY hf.id)
+                     FROM file_hdr_formats fhf
+                     JOIN hdr_formats hf ON hf.id = fhf.hdr_format_id
+                     WHERE fhf.file_id = mf.id) AS hdr_names,
+                    (SELECT STRING_AGG(DISTINCT l.label, ',' ORDER BY l.label)
+                     FROM audio_tracks at
+                     JOIN languages l ON l.id = at.language_id
+                     WHERE at.file_id = mf.id) AS audio_langs,
+                    (SELECT STRING_AGG(DISTINCT l.label, ',' ORDER BY l.label)
+                     FROM subtitle_tracks st
+                     JOIN languages l ON l.id = st.language_id
+                     WHERE st.file_id = mf.id) AS sub_langs,
+                    CASE WHEN mf.disk_status = 'duplicate' THEN (
+                        SELECT mf2.path_relative
+                        FROM media_files mf2
+                        WHERE mf2.hash_partial = mf.hash_partial AND mf2.id != mf.id
+                        ORDER BY mf2.id LIMIT 1
+                    ) ELSE NULL END AS duplicate_of
+                {base_sql}
+                ORDER BY mf.path_relative
+                LIMIT :limit OFFSET :offset
+            """), params).mappings().fetchall()
+
+        def _res(h):
+            if not h:     return None
+            if h >= 2160: return "4K"
+            if h >= 1080: return "1080p"
+            if h >= 720:  return "720p"
+            return "SD"
+
+        return JSONResponse({
+            "total": total,
+            "page":  page,
+            "limit": limit,
+            "items": [{
+                "id":          r["id"],
+                "filename":    r["filename"],
+                "path":        r["path_relative"],
+                "size_bytes":  r["size_bytes"],
+                "disk_status": r["disk_status"],
+                "codec":       r["video_codec"],
+                "resolution":  _res(r["video_height"]),
+                "hdr":         r["hdr_names"],
+                "audio_langs":  r["audio_langs"].split(",") if r["audio_langs"] else [],
+                "sub_langs":    r["sub_langs"].split(",")   if r["sub_langs"]   else [],
+                "duration":     r["duration_seconds"],
+                "duplicate_of": r["duplicate_of"],
+            } for r in rows],
+        })
+    except Exception as e:
+        logger.error(f"library_files: {e}")
         raise HTTPException(500, str(e))
 
 

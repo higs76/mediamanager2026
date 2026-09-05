@@ -18,7 +18,7 @@ from pathlib import Path
 
 from sqlalchemy import text
 from watcher.database import engine
-from watcher.config_db import get_config, get_video_extensions, get_scan_interval_hours
+from watcher.config_db import get_config, get_video_extensions, get_scan_interval_hours, get_ignored_scan_dirs, get_trash_scan_dirs
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +78,82 @@ def compute_partial_hash(filepath: str) -> str | None:
 
 
 # ─────────────────────────────────────────────────────────────
+# Corbeilles NAS (#recycle, @Recycle...) — mesure sans catalogage
+# ─────────────────────────────────────────────────────────────
+
+def _measure_trash_dir(trash_path: str, video_extensions: set) -> tuple[int, int]:
+    """Somme récursive taille + nb fichiers vidéo d'un dossier corbeille.
+    Ne compte que les mêmes extensions que le scan normal — un .nfo ou une
+    miniature résiduelle ne doit pas faire croire à de l'espace récupérable."""
+    total_size  = 0
+    total_files = 0
+    for dp, _, fnames in os.walk(trash_path):
+        for fn in fnames:
+            if Path(fn).suffix.lower() not in video_extensions:
+                continue
+            try:
+                total_size += os.path.getsize(os.path.join(dp, fn))
+                total_files += 1
+            except OSError:
+                continue
+    return total_size, total_files
+
+
+def _upsert_trash_folder(mount_id: int, path_relative: str,
+                          size_bytes: int, file_count: int) -> None:
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("""
+                INSERT INTO trash_folders
+                    (mount_id, path_relative, size_bytes, file_count, last_seen_at)
+                VALUES (:mid, :path, :size, :cnt, NOW())
+                ON CONFLICT (mount_id, path_relative) DO UPDATE
+                SET size_bytes   = EXCLUDED.size_bytes,
+                    file_count   = EXCLUDED.file_count,
+                    last_seen_at = NOW()
+            """), {"mid": mount_id, "path": path_relative,
+                    "size": size_bytes, "cnt": file_count})
+            conn.commit()
+    except Exception as e:
+        logger.error(f"trash_folders upsert {path_relative} : {e}")
+
+
+def _purge_trash_media_files(mount_id: int, trash_rel: str) -> None:
+    """Supprime les entrées media_files résiduelles situées sous une corbeille.
+    Ce contenu ne sera plus jamais revisité par le scanner (dossier élagué du
+    parcours) — le laisser en base fausserait les comparaisons manquant/doublon
+    avec des fichiers qui sont en réalité déjà à la poubelle."""
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("""
+                DELETE FROM media_files
+                WHERE mount_id = :mid
+                  AND (path_relative = :rel OR path_relative LIKE :rel_prefix)
+            """), {"mid": mount_id, "rel": trash_rel, "rel_prefix": trash_rel + "/%"})
+            conn.commit()
+    except Exception as e:
+        logger.error(f"purge trash media_files {trash_rel} : {e}")
+
+
+def _cleanup_trash_folders(mount_id: int, seen_paths: set) -> None:
+    """Supprime les corbeilles disparues (purgées par le NAS ou déplacées)."""
+    try:
+        with engine.connect() as conn:
+            if seen_paths:
+                conn.execute(text("""
+                    DELETE FROM trash_folders
+                    WHERE mount_id = :mid AND path_relative != ALL(:seen)
+                """), {"mid": mount_id, "seen": list(seen_paths)})
+            else:
+                conn.execute(text(
+                    "DELETE FROM trash_folders WHERE mount_id = :mid"
+                ), {"mid": mount_id})
+            conn.commit()
+    except Exception as e:
+        logger.error(f"trash_folders cleanup mount {mount_id} : {e}")
+
+
+# ─────────────────────────────────────────────────────────────
 # Scan d'un montage
 # ─────────────────────────────────────────────────────────────
 
@@ -127,19 +203,42 @@ def scan_mount(mount_id: int, job_id: int) -> dict:
         _fail_job(job_id, f"Dossier inaccessible : {local_path}")
         return counters
 
-    video_extensions = get_video_extensions()
+    video_extensions  = get_video_extensions()
+    ignored_dir_names = get_ignored_scan_dirs()   # ignorés totalement (ni scannés, ni mesurés)
+    trash_dir_names   = get_trash_scan_dirs()     # corbeilles : mesurées mais pas cataloguées
     scan_start = datetime.now()
 
     # IDs des fichiers vus pendant ce scan (pour détecter les missing)
     seen_ids: set[int] = set()
+    # Chemins relatifs des corbeilles vues pendant ce scan (pour purger les disparues)
+    seen_trash_paths: set[str] = set()
 
     # ── 3. Parcours récursif ──────────────────────────────────
     logger.info(f"Scan montage {mount_id} : {local_path}")
     _update_job(job_id, status="running", started_at=scan_start)
 
     for dirpath, dirnames, filenames in os.walk(local_path):
-        # Ignorer les dossiers cachés (ex: .Recycle, @eaDir sur Synology)
-        dirnames[:] = [d for d in dirnames if not d.startswith(".") and not d.startswith("@")]
+        # Mesurer les corbeilles NAS avant de les élaguer du parcours
+        # (espace récupérable — voir Bibliothèque / Dashboard)
+        for d in dirnames:
+            if d.lower() in trash_dir_names:
+                trash_full = os.path.join(dirpath, d)
+                try:
+                    trash_rel = str(Path(trash_full).relative_to(local_path))
+                except ValueError:
+                    trash_rel = trash_full
+                seen_trash_paths.add(trash_rel)
+                size_bytes, file_count = _measure_trash_dir(trash_full, video_extensions)
+                _upsert_trash_folder(mount_id, trash_rel, size_bytes, file_count)
+                _purge_trash_media_files(mount_id, trash_rel)
+
+        # Ignorer les dossiers cachés, ignorés (config) et corbeilles NAS (mesurées ci-dessus)
+        dirnames[:] = [
+            d for d in dirnames
+            if not d.startswith(".")
+            and d.lower() not in ignored_dir_names
+            and d.lower() not in trash_dir_names
+        ]
 
         for filename in filenames:
             ext = Path(filename).suffix.lower()
@@ -176,15 +275,18 @@ def scan_mount(mount_id: int, job_id: int) -> dict:
             # ── Logique BDD ───────────────────────────────────
             try:
                 with engine.connect() as conn:
+                    # Préférer l'enregistrement du montage courant s'il existe déjà
                     existing = conn.execute(text("""
                         SELECT id, mount_id, path_relative, status
                         FROM media_files
                         WHERE hash_partial = :hash
-                    """), {"hash": file_hash}).fetchone()
+                        ORDER BY (mount_id = :mid) DESC, id ASC
+                        LIMIT 1
+                    """), {"hash": file_hash, "mid": mount_id}).fetchone()
 
                     if existing is None:
                         # Cas A : nouveau fichier
-                        conn.execute(text("""                            
+                        conn.execute(text("""
                             INSERT INTO media_files
                                 (mount_id, hash_partial, path_relative, filename,
                                 extension, size_bytes, status, disk_status, file_mtime)
@@ -200,19 +302,47 @@ def scan_mount(mount_id: int, job_id: int) -> dict:
                             "mtime": file_mtime
                         })
                         new_id = conn.execute(text(
-                            "SELECT id FROM media_files WHERE hash_partial = :hash",
-                        ), {"hash": file_hash}).fetchone()[0]
+                            "SELECT id FROM media_files WHERE hash_partial = :hash AND mount_id = :mid",
+                        ), {"hash": file_hash, "mid": mount_id}).fetchone()[0]
                         seen_ids.add(new_id)
                         counters["files_new"] += 1
 
                     elif existing[1] != mount_id:
-                        # Cas D : même hash, montage différent → doublon
+                        # Cas D : même hash, montage différent → les deux sont doublons
+                        # Marquer l'existant comme doublon
                         conn.execute(text("""
                             UPDATE media_files
                             SET disk_status = 'duplicate', last_seen_at = NOW()
                             WHERE id = :id
                         """), {"id": existing[0]})
                         seen_ids.add(existing[0])
+                        # Insérer l'entrée pour le montage courant (ON CONFLICT pour idempotence)
+                        conn.execute(text("""
+                            INSERT INTO media_files
+                                (mount_id, hash_partial, path_relative, filename,
+                                extension, size_bytes, status, disk_status, file_mtime)
+                            VALUES
+                                (:mid, :hash, :path, :fname, :ext, :size, :status, 'duplicate', :mtime)
+                            ON CONFLICT (hash_partial, mount_id) DO UPDATE
+                            SET path_relative = EXCLUDED.path_relative,
+                                filename      = EXCLUDED.filename,
+                                disk_status   = 'duplicate',
+                                last_seen_at  = NOW()
+                        """), {
+                            "mid":    mount_id,
+                            "hash":   file_hash,
+                            "path":   path_relative,
+                            "fname":  filename,
+                            "ext":    ext,
+                            "size":   file_size,
+                            "mtime":  file_mtime,
+                            "status": existing[3],  # copier le status de l'original
+                        })
+                        cur_id = conn.execute(text(
+                            "SELECT id FROM media_files WHERE hash_partial = :hash AND mount_id = :mid"
+                        ), {"hash": file_hash, "mid": mount_id}).fetchone()
+                        if cur_id:
+                            seen_ids.add(cur_id[0])
                         counters["files_duplicate"] += 1
 
                     elif existing[2] != path_relative:
@@ -234,6 +364,7 @@ def scan_mount(mount_id: int, job_id: int) -> dict:
 
                     else:
                         # Cas B : fichier connu, rien n'a changé
+                        # disk_status : 'duplicate' si une autre copie existe, sinon 'present'
                         conn.execute(text("""
                             UPDATE media_files
                             SET status = CASE
@@ -242,7 +373,14 @@ def scan_mount(mount_id: int, job_id: int) -> dict:
                                     ) THEN 'analyzed'
                                     ELSE 'discovered'
                                 END,
-                                disk_status  = 'present',
+                                disk_status = CASE
+                                    WHEN EXISTS (
+                                        SELECT 1 FROM media_files mf2
+                                        WHERE mf2.hash_partial = media_files.hash_partial
+                                          AND mf2.id != media_files.id
+                                    ) THEN 'duplicate'
+                                    ELSE 'present'
+                                END,
                                 last_seen_at = NOW()
                             WHERE id = :id
                         """), {"id": existing[0]})
@@ -258,9 +396,11 @@ def scan_mount(mount_id: int, job_id: int) -> dict:
     try:
         with engine.connect() as conn:
             # Tous les fichiers de ce montage qui n'ont pas été vus
+            # ('duplicate' inclus : un doublon réellement supprimé du disque
+            # doit pouvoir repasser missing, pas rester doublon indéfiniment)
             all_rows = conn.execute(text("""
                 SELECT id FROM media_files
-                WHERE mount_id = :mid AND disk_status = 'present'
+                WHERE mount_id = :mid AND disk_status IN ('present', 'duplicate')
             """), {"mid": mount_id}).fetchall()
 
             missing_ids = [r[0] for r in all_rows if r[0] not in seen_ids]
@@ -276,6 +416,8 @@ def scan_mount(mount_id: int, job_id: int) -> dict:
             conn.commit()
     except Exception as e:
         logger.error(f"Erreur marquage missing montage {mount_id} : {e}")
+
+    _cleanup_trash_folders(mount_id, seen_trash_paths)
 
     # ── 5. Clôturer le job ────────────────────────────────────
     try:

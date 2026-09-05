@@ -120,6 +120,8 @@ mediamanager2026/
 ├── watcher/                      # Service principal FastAPI
 │   ├── app.py                   # Cycle de vie, middleware, montage statiques
 │   ├── api.py                   # Assembleur des routers
+│   ├── auth.py                  # Hachage bcrypt, cookies de session signés (itsdangerous)
+│   ├── lang_codes.py            # Normalisation des codes langue (ISO 639)
 │   ├── scanner.py               # Détection fichiers sur NAS (ScanQueue)
 │   ├── analyzer.py              # Extraction ffprobe (AnalyzeQueue)
 │   ├── cataloger.py             # Construction catalogue + propositions (CatalogQueue)
@@ -131,7 +133,9 @@ mediamanager2026/
 │   │   ├── categories.py        # CRUD catégories, règles de nommage
 │   │   ├── mounts.py            # CRUD montages NAS, sync, browse
 │   │   ├── stats.py             # Statistiques qualité, jobs
-│   │   └── system.py            # Config, update, version, logs
+│   │   ├── system.py            # Config, update, version, logs
+│   │   ├── auth.py               # Login, logout, session, initialisation setup
+│   │   └── users.py              # CRUD utilisateurs, rôles, propositions de renommage utilisateur
 │   └── utils/
 │       ├── perf.py              # Ring buffer monitoring performances SQL
 │       ├── versioning.py        # git info, GitHub releases
@@ -145,14 +149,18 @@ mediamanager2026/
 │   │   ├── app.css              # Styles (thèmes dark/light/auto, ~1000 lignes)
 │   │   ├── library.js           # Navigation catalogue, détail technique
 │   │   └── rename.js            # Interface validation propositions de renommage
-│   └── admin/                   # Interface d'administration
-│       ├── index.html
-│       ├── admin.css
-│       ├── admin.js             # Dashboard, logs, jobs
-│       ├── mounts.js            # Gestion montages NAS
-│       ├── config.js            # Éditeur configuration
-│       ├── stats.js             # Statistiques qualité vidéo
-│       └── perf.js              # Monitoring performances SQL
+│   ├── admin/                   # Interface d'administration
+│   │   ├── index.html
+│   │   ├── admin.css
+│   │   ├── admin.js             # Dashboard, logs, jobs
+│   │   ├── mounts.js            # Gestion montages NAS
+│   │   ├── config.js            # Éditeur configuration
+│   │   ├── stats.js             # Statistiques qualité vidéo
+│   │   ├── perf.js              # Monitoring performances SQL
+│   │   ├── library.js           # Gestion bibliothèque côté admin
+│   │   └── shared.js            # Fonctions communes aux pages admin
+│   ├── login/                   # Page de connexion (session cookie)
+│   └── setup/                   # Assistant de création du premier compte admin
 ├── scripts/
 │   ├── mediamanager-proxmox.sh          # Création du LXC sur Proxmox
 │   ├── proxmox-install.sh               # Installation dans le LXC
@@ -174,17 +182,24 @@ Tables principales :
 
 | Table | Description |
 |---|---|
+| `users` | Comptes utilisateurs (admin/foyer), mot de passe bcrypt, rôle |
 | `categories` | Types de médias (Séries, Films, Animés…) |
+| `naming_templates` | Modèles de renommage par catégorie |
+| `known_servers` | Serveurs NAS connus (historique de connexion) |
 | `mounts` | Montages NAS (header commun SMB/NFS) |
 | `mount_smb` | Paramètres spécifiques SMB/CIFS |
 | `mount_nfs` | Paramètres spécifiques NFS |
 | `media_files` | Fichiers détectés sur les montages |
 | `media_titles` | Titres catalogués (série ou film) |
-| `media_items` | Épisodes / fichiers liés à un titre |
-| `video_metadata` | Métadonnées ffprobe (codec, résolution, audio, HDR…) |
+| `media_items` | Épisodes / fichiers liés à un titre (bonus et multi-épisodes supportés) |
+| `video_metadata` | Métadonnées ffprobe (résolution, bitrate, disposition…) |
+| `codecs` / `languages` / `hdr_formats` | Tables de référence normalisées (valeurs uniques réutilisées) |
+| `audio_tracks` / `subtitle_tracks` | Pistes audio et sous-titres normalisées, liées à `video_metadata` |
+| `file_hdr_formats` | Association fichier ↔ formats HDR (many-to-many) |
+| `trash_folders` | Corbeilles NAS détectées (taille récupérable, non cataloguées) |
 | `rename_proposals` | Propositions de renommage générées par le catalogueur |
 | `media_files_history` | Historique des fichiers renommés |
-| `app_config` | Configuration dynamique (clé/valeur) |
+| `config` | Configuration dynamique (clé/valeur) |
 | `scan_jobs` | Historique des scans par montage |
 | `analyze_sessions` | Sessions d'analyse ffprobe |
 | `schema_migrations` | Migrations appliquées |
@@ -205,22 +220,22 @@ Tables principales :
 
 | Suffixe | Branche | Visibilité |
 |---|---|---|
-| `0.5.2` | `main` | Tous les utilisateurs |
-| `0.5.2-dev` | `dev` | Développeur uniquement (`ALLOW_PRERELEASE=true`) |
+| `0.6.0` | `main` | Tous les utilisateurs |
+| `0.6.0-dev` | `dev` | Développeur uniquement (`ALLOW_PRERELEASE=true`) |
 
 ### Publier une nouvelle version
 
 ```bash
 # Branche dev → pre-release
-git tag v0.5.2-dev
-git push origin v0.5.2-dev
+git tag v0.6.0-dev
+git push origin v0.6.0-dev
 # Sur GitHub : Create release → cocher "Pre-release"
 
 # Branche main → release stable
 git checkout main && git merge dev
-echo "0.5.2" > VERSION
-git tag v0.5.2
-git push origin main && git push origin v0.5.2
+echo "0.6.0" > VERSION
+git tag v0.6.0
+git push origin main && git push origin v0.6.0
 # Sur GitHub : Create release → NE PAS cocher "Pre-release"
 git checkout dev && git merge main
 ```
@@ -238,6 +253,9 @@ git checkout dev && git merge main
 - [x] Phase 3 — Moteur de propositions de renommage (règles configurables)
 - [x] Phase 4 — Interface bibliothèque (navigation, recherche, détail technique, marquer vu)
 - [x] Phase 4 — Interface renommage (validation, édition inline, aperçu)
-- [ ] Authentification (HTTP Basic Auth)
+- [x] Phase 5 — Authentification (cookies de session signés, bcrypt) et gestion multi-utilisateurs (rôles)
+- [x] Phase 5 — Assistant de configuration initiale (`/setup`) et page de connexion (`/login`)
+- [x] Phase 5 — Normalisation des pistes audio/sous-titres, codecs, HDR et langues (tables de référence)
+- [x] Phase 5 — Support du contenu bonus et des fichiers multi-épisodes dans le catalogue
 - [ ] Tests d'intégration
 - [ ] Champs audio en arrays PostgreSQL natifs (TEXT[])

@@ -41,7 +41,7 @@ const Stats = (() => {
          onclick="Stats.filterCat(null)">Toutes</button>`,
       ..._categories.map(c =>
         `<button class="tab-btn${_catId === c.id ? ' active' : ''}"
-           onclick="Stats.filterCat(${c.id},'${_esc(c.name)}')">
+           onclick="Stats.filterCat(${c.id},'${escHtml(c.name)}')">
            ${_cap(c.name)}
          </button>`
       )
@@ -166,17 +166,17 @@ const Stats = (() => {
 
     box.innerHTML = visible.map(t => `
       <div class="title-row">
-        <span class="title-name">${_esc(t.name)}</span>
+        <span class="title-name">${escHtml(t.name)}</span>
         <span class="title-count">
           ${t.count} fichier${t.count > 1 ? 's' : ''}
-          — ${_formatSize(t.size_gb)}
+          — ${fmtBytes(t.size_gb * 1073741824)}
         </span>
       </div>`).join('')
       + (hidden.length ? `
         <div id="titles-more" class="hidden">
           ${hidden.map(t => `
             <div class="title-row">
-              <span class="title-name">${_esc(t.name)}</span>
+              <span class="title-name">${escHtml(t.name)}</span>
               <span class="title-count">${t.count} fichier${t.count > 1 ? 's' : ''}</span>
             </div>`).join('')}
         </div>
@@ -199,7 +199,7 @@ const Stats = (() => {
       const pct = Math.round(item.count / total * 100);
       const col = PALETTE[idx % PALETTE.length];
       return `<span class="lang-tag" style="--tag-color:${col}">
-        ${_esc(item.label)}
+        ${escHtml(item.label)}
         <span class="lang-tag-count">${item.count.toLocaleString('fr-FR')} (${pct}%)</span>
       </span>`;
     }).join('');
@@ -264,7 +264,7 @@ const Stats = (() => {
         const pct = Math.round(d.count / total * 100);
         return `<div class="legend-item">
           <div class="legend-dot" style="background:${colors[i]}"></div>
-          <span>${_esc(d.label)} <strong>${pct}%</strong></span>
+          <span>${escHtml(d.label)} <strong>${pct}%</strong></span>
         </div>`;
       }).join('');
     }
@@ -276,20 +276,6 @@ const Stats = (() => {
     if (el) el.textContent = val;
   }
   function _cap(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
-  function _esc(s) {
-    return String(s ?? '')
-      .replace(/&/g,'&amp;').replace(/</g,'&lt;')
-      .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-  }
-
-  function _formatSize(gb) {
-    const v = parseFloat(gb) || 0;
-    if (v >= 1024) return (v / 1024).toFixed(1) + ' To';
-    if (v >= 1)    return v + ' Go';
-    const mb = Math.round(v * 1024);
-    if (mb === 0)  return '< 1 Mo';
-    return mb + ' Mo';
-  }
 
   return { load, filterCat };
 

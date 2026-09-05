@@ -12,6 +12,7 @@ const Mounts = (() => {
   let _editingId  = null;
   let _deletingId = null;
   let _selType    = null;
+  let _categoryCounts = {};  // {categoryName: fileCount} — fourni par admin.js après /files/stats
 
   // État du wizard
   let _wizardStep      = 1;
@@ -126,6 +127,19 @@ const Mounts = (() => {
   /* ── Init ─────────────────────────────────────────────────────────────── */
   async function init() {
     await Promise.all([_loadMounts(), _loadCategories()]);
+    const intervalSec = await _loadRefreshInterval();
+    setInterval(refresh, intervalSec * 1000);
+  }
+
+  async function _loadRefreshInterval() {
+    try {
+      const r = await fetch(`${API}/api/admin/config`);
+      const d = await r.json();
+      const entry = (d ?? []).find(c => c.key === 'mount_status_refresh_interval');
+      return entry ? Math.max(10, parseInt(entry.value, 10)) : 30;
+    } catch {
+      return 30;
+    }
   }
 
   /* ── Chargement ───────────────────────────────────────────────────────── */
@@ -172,31 +186,48 @@ const Mounts = (() => {
     const mounted = _allMounts.filter(m => m.is_mounted).length;
     const total   = _allMounts.length;
     const failed  = total - mounted;
-    const setText = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
-    setText('stat-mounts-up',    mounted);
-    setText('stat-mounts-down',  failed);
-    setText('stat-mounts-total', total);
-    setText('stat-mounts-up2',   mounted);
-    setText('stat-mounts-down2', failed);
-    setText('stat-mounts-label', `${total} montage${total > 1 ? 's' : ''} configuré${total > 1 ? 's' : ''}`);
-    const pct = total > 0 ? Math.round(mounted / total * 100) : 0;
-    const bar = document.getElementById('stat-mounts-bar');
-    if (bar) bar.style.width = pct + '%';
-    const cats = _categories.length ? _categories.join(', ') : '—';
-    const catEl = document.getElementById('stat-categories-list');
-    if (catEl) catEl.textContent = cats;
+    const summaryEl = document.getElementById('mount-summary');
+    if (!summaryEl) return;
+    const fileTotal = Object.values(_categoryCounts).reduce((a, b) => a + b, 0);
+    const mc = (cls, title, txt) =>
+      `<span class="mount-cap ${cls}" title="${title}">${txt}</span>`;
+    summaryEl.innerHTML =
+      mc('mc-ok',    `${mounted} montage${mounted !== 1 ? 's' : ''} actif${mounted !== 1 ? 's' : ''}`,
+                     `${mounted} monté${mounted !== 1 ? 's' : ''}`) +
+      mc('mc-err',   `${failed} montage${failed !== 1 ? 's' : ''} en erreur`,
+                     `${failed} erreur${failed !== 1 ? 's' : ''}`) +
+      mc('mc-total', `${total} montage${total !== 1 ? 's' : ''} configuré${total !== 1 ? 's' : ''}`,
+                     `${total} total`) +
+      (fileTotal > 0
+        ? mc('mc-files',
+             `${fileTotal.toLocaleString('fr-FR')} fichiers indexés`,
+             fileTotal.toLocaleString('fr-FR') + ' fichiers')
+        : '');
   }
 
   /* ── Filtres catégories ───────────────────────────────────────────────── */
   function _renderCategoryFilters() {
     const container = document.getElementById('cat-filters');
     if (!container) return;
+    const totalCount = Object.values(_categoryCounts).reduce((a, b) => a + b, 0);
     const cats = ['all', ..._categories];
     container.innerHTML = cats.map(cat => {
       const label = cat === 'all' ? 'Tous' : _cap(cat);
+      const cnt = cat === 'all'
+        ? (totalCount > 0 ? totalCount : null)
+        : (_categoryCounts[cat] ?? null);
+      const countHtml = cnt != null
+        ? `<span class="tab-count">${cnt.toLocaleString('fr-FR')}</span>`
+        : '';
       return `<button class="tab-btn${cat === _currentCat ? ' active' : ''}"
-        onclick="Mounts._filterCat(this,'${_esc(cat)}')">${label}</button>`;
+        onclick="Mounts._filterCat(this,'${escHtml(cat)}')">${label}${countHtml}</button>`;
     }).join('');
+  }
+
+  function updateCategoryCounts(counts) {
+    _categoryCounts = counts;
+    _renderCategoryFilters();
+    _syncDashStats();
   }
 
   function _renderCategorySelect() {
@@ -205,7 +236,7 @@ const Mounts = (() => {
     if (sel) {
       const cur = sel.value;
       sel.innerHTML = '<option value="">— Choisir —</option>'
-        + _categories.map(c => `<option value="${_esc(c)}">${_cap(c)}</option>`).join('');
+        + _categories.map(c => `<option value="${escHtml(c)}">${_cap(c)}</option>`).join('');
       if (cur) sel.value = cur;
     }
   }
@@ -237,15 +268,15 @@ const Mounts = (() => {
 
     tbody.innerHTML = filtered.map(m => {
       const source = m.mount_type === 'nfs'
-        ? `${_esc(m.server ?? '')}${_esc(m.export_path ?? '')}`
-        : `${_esc(m.server ?? '')}${_esc(m.share ?? '')}`;
+        ? `${escHtml(m.server ?? '')}${escHtml(m.export_path ?? '')}`
+        : `${escHtml(m.server ?? '')}${escHtml(m.share ?? '')}`;
       return `<tr data-id="${m.id}">
-        <td class="td-name">${m.id} - ${_esc(m.category_name)}</td>
-        <td><span class="badge badge-blue">${_esc(m.category_name)}</span></td>
+        <td class="td-name">${m.id} - ${escHtml(m.category_name)}</td>
+        <td><span class="badge badge-blue">${escHtml(m.category_name)}</span></td>
         <td><span class="badge badge-muted">${(m.mount_type || 'smb').toUpperCase()}</span></td>
         <td class="td-path">${source}</td>
-        <td class="td-mono" title="${_esc(m.local_path)}">
-          …/${_esc(m.local_path.split('/MediaManagerMnt/').pop() ?? m.local_path)}
+        <td class="td-mono" title="${escHtml(m.local_path)}">
+          …/${escHtml(m.local_path.split('/MediaManagerMnt/').pop() ?? m.local_path)}
         </td>
         <td>${m.is_mounted
           ? '<span class="badge badge-success"><span class="dot"></span>Monté</span>'
@@ -281,7 +312,7 @@ const Mounts = (() => {
     if (!sel) return;
     sel.innerHTML = '<option value="">— Nouveau serveur —</option>'
       + _wizardKnownServers.map(s =>
-          `<option value="${s.id}">${_esc(s.server)} (${s.mount_type.toUpperCase()})</option>`
+          `<option value="${s.id}">${escHtml(s.server)} (${s.mount_type.toUpperCase()})</option>`
         ).join('');
   }
 
@@ -423,7 +454,7 @@ const Mounts = (() => {
 
       if (d.error && !d.shares?.length) {
         grid.innerHTML = `<div class="wizard-shares-msg error">
-          <i class="bi bi-exclamation-triangle"></i> ${_esc(d.error)}</div>`;
+          <i class="bi bi-exclamation-triangle"></i> ${escHtml(d.error)}</div>`;
         return;
       }
       if (!d.shares?.length) {
@@ -436,7 +467,7 @@ const Mounts = (() => {
 
     } catch (e) {
       grid.innerHTML = `<div class="wizard-shares-msg error">
-        <i class="bi bi-wifi-off"></i> ${_esc(e.message)}</div>`;
+        <i class="bi bi-wifi-off"></i> ${escHtml(e.message)}</div>`;
     } finally {
       if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-search"></i> Scanner les partages'; }
     }
@@ -456,7 +487,7 @@ const Mounts = (() => {
       : (_getVal('w-nfs-server') || '').trim().toLowerCase();
 
     const catOptions = '<option value="">— Choisir —</option>'
-      + _categories.map(c => `<option value="${_esc(c)}">${_cap(c)}</option>`).join('');
+      + _categories.map(c => `<option value="${escHtml(c)}">${_cap(c)}</option>`).join('');
 
     grid.innerHTML = `
       <div class="shares-grid-row shares-grid-header">
@@ -472,7 +503,7 @@ const Mounts = (() => {
                  ${disabled ? 'disabled checked' : ''}
                  onchange="Mounts._wizardToggleShare(${i})">
           <label for="share-cb-${i}" class="share-label">
-            ${_esc(share)}
+            ${escHtml(share)}
             ${disabled ? '<span class="share-already">déjà configuré</span>' : ''}
           </label>
           <select id="share-cat-${i}" ${disabled ? 'disabled' : ''}
@@ -520,9 +551,9 @@ const Mounts = (() => {
     div.innerHTML = _wizardSelected.map(s => `
       <div class="summary-row">
         <i class="bi bi-folder2 text-blue"></i>
-        <span class="summary-share">${_esc(server)}${_esc(s.share)}</span>
+        <span class="summary-share">${escHtml(server)}${escHtml(s.share)}</span>
         <span class="summary-arrow">→</span>
-        <span class="summary-cat"><i class="bi bi-collection"></i> ${_cap(_esc(s.category_name))}</span>
+        <span class="summary-cat"><i class="bi bi-collection"></i> ${_cap(escHtml(s.category_name))}</span>
       </div>
     `).join('');
   }
@@ -600,7 +631,7 @@ const Mounts = (() => {
   function _wizardRefreshCatSelects() {
     // Mettre à jour tous les selects de la grille sans la re-rendre entièrement
     const catOptions = '<option value="">— Choisir —</option>'
-      + _categories.map(c => `<option value="${_esc(c)}">${_cap(c)}</option>`).join('');
+      + _categories.map(c => `<option value="${escHtml(c)}">${_cap(c)}</option>`).join('');
     _wizardShares.forEach((_, i) => {
       const sel = document.getElementById(`share-cat-${i}`);
       if (sel && !sel.disabled) {
@@ -805,8 +836,11 @@ const Mounts = (() => {
         if (cell) cell.innerHTML = s.is_mounted
           ? '<span class="badge badge-success"><span class="dot"></span>Monté</span>'
           : '<span class="badge badge-danger"><span class="dot"></span>Non monté</span>';
+        const m = _allMounts.find(x => x.id === s.id);
+        if (m) m.is_mounted = s.is_mounted;
       }
       _syncDashStats();
+      if (typeof loadPipeline === 'function') loadPipeline();
     } catch (e) {
       _showBanner('error', e.message);
     }
@@ -843,7 +877,7 @@ const Mounts = (() => {
       const r = await fetch(url);
       const d = await r.json();
       if (d.error && !d.shares?.length) {
-        box.innerHTML = `<div class="browse-msg browse-error"><i class="bi bi-exclamation-triangle"></i> ${_esc(d.error)}</div>`;
+        box.innerHTML = `<div class="browse-msg browse-error"><i class="bi bi-exclamation-triangle"></i> ${escHtml(d.error)}</div>`;
         return;
       }
       if (!d.shares?.length) {
@@ -851,12 +885,12 @@ const Mounts = (() => {
         return;
       }
       box.innerHTML = d.shares.map(s =>
-        `<div class="browse-item" onclick="Mounts._pickShare('${_esc(s)}')">
-          <i class="bi bi-folder2"></i>${_esc(s)}
+        `<div class="browse-item" onclick="Mounts._pickShare('${escHtml(s)}')">
+          <i class="bi bi-folder2"></i>${escHtml(s)}
         </div>`
       ).join('');
     } catch (e) {
-      box.innerHTML = `<div class="browse-msg browse-error"><i class="bi bi-wifi-off"></i> ${_esc(e.message)}</div>`;
+      box.innerHTML = `<div class="browse-msg browse-error"><i class="bi bi-wifi-off"></i> ${escHtml(e.message)}</div>`;
     }
   }
 
@@ -881,7 +915,7 @@ const Mounts = (() => {
     el.className = `alert ${cls}`;
     el.classList.remove('hidden');
     el.innerHTML = `<div><strong>${title}</strong>${detail
-      ? `<br><span class="banner-detail">${_esc(detail)}</span>`
+      ? `<br><span class="banner-detail">${escHtml(detail)}</span>`
       : ''}</div>`;
   }
 
@@ -893,11 +927,6 @@ const Mounts = (() => {
   function _getVal(id)   { return document.getElementById(id)?.value ?? ''; }
   function _setVal(id,v) { const el = document.getElementById(id); if (el) el.value = v; }
   function _cap(s)       { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
-  function _esc(s) {
-    return String(s ?? '')
-      .replace(/&/g,'&amp;').replace(/</g,'&lt;')
-      .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-  }
 
   /* ══════════════════════════════════════════════════════════════════════════
      MODAL — Création de catégorie
@@ -948,11 +977,11 @@ const Mounts = (() => {
     const defGroup = filtered.filter(t => t.is_default);
     const usrGroup = filtered.filter(t => !t.is_default);
     let html = '<optgroup label="Par défaut (lecture seule)">'
-      + defGroup.map(t => `<option value="${t.id}">🔒 ${_esc(t.preview)}</option>`).join('')
+      + defGroup.map(t => `<option value="${t.id}">🔒 ${escHtml(t.preview)}</option>`).join('')
       + '</optgroup>';
     if (usrGroup.length) {
       html += '<optgroup label="Mes templates">'
-        + usrGroup.map(t => `<option value="${t.id}">✏️ ${_esc(t.preview)}</option>`).join('')
+        + usrGroup.map(t => `<option value="${t.id}">✏️ ${escHtml(t.preview)}</option>`).join('')
         + '</optgroup>';
     }
     sel.innerHTML = html;
@@ -1142,5 +1171,7 @@ const Mounts = (() => {
     openCategoryModal, closeCategoryModal,
     newcatSelectType, newcatSelTpl, newcatToggleForm,
     newcatUpdPrev, newcatSaveTpl, saveNewCategory,
+    // Appelé par admin.js après /files/stats
+    updateCategoryCounts,
   };
 })();

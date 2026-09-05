@@ -10,30 +10,38 @@ Responsabilités :
 """
 
 import logging
+import logging.handlers
 import sys
 import os
 import subprocess
 
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 from contextlib import asynccontextmanager
 
-from watcher.config import API_HOST, API_PORT, API_DEBUG, PROJECT_ROOT, LOG_LEVEL, LOG_FILE
+from watcher.config import (
+    API_HOST, API_PORT, API_DEBUG, PROJECT_ROOT, LOG_LEVEL, LOG_FILE, LOG_RETENTION_DAYS,
+)
 from watcher.database import engine
 from watcher.api import router as admin_router
+from watcher.routers.auth import router as auth_router
 from watcher.utils.versioning import get_app_version
 from sqlalchemy import text
 
 # ==========================================
 # Configuration Logging
 # ==========================================
+_file_handler = logging.handlers.TimedRotatingFileHandler(
+    LOG_FILE, when='midnight', backupCount=LOG_RETENTION_DAYS, encoding='utf-8'
+)
 logging.basicConfig(
     level=LOG_LEVEL,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler(LOG_FILE),
+        _file_handler,
         logging.StreamHandler(sys.stdout)
     ]
 )
@@ -179,6 +187,9 @@ async def lifespan(app: FastAPI):
     ensure_system_dependencies()
     init_database_tables()
 
+    from watcher.auth import init_setup_flag
+    init_setup_flag()
+
     # Nettoyage des jobs interrompus par un redémarrage brutal
     try:
         with engine.connect() as conn:
@@ -216,14 +227,23 @@ async def lifespan(app: FastAPI):
     catalog_queue.start()
     scan_queue.enqueue_all_active()
 
+    from watcher.routers.mounts import remount_all_active, mount_watchdog
+    result = remount_all_active()
+    if result["added"]:
+        logger.info(f"✓ {len(result['added'])} montage(s) restauré(s) au démarrage")
+    if result["errors"]:
+        logger.warning(f"⚠ {len(result['errors'])} montage(s) inaccessible(s) au démarrage")
+    mount_watchdog.start()
+
     yield
 
     logger.info("Arrêt du service MediaManager Watcher")
     try:
+        mount_watchdog.stop()
         scan_queue.stop()
         analyze_queue.stop()
         catalog_queue.stop()
-        logger.info("✓ Queues arrêtées proprement")
+        logger.info("✓ Queues et watchdog arrêtés proprement")
     except Exception as e:
         logger.warning(f"Arrêt queues : {e}")
 
@@ -231,6 +251,38 @@ async def lifespan(app: FastAPI):
 # ==========================================
 # Application FastAPI
 # ==========================================
+class AuthMiddleware(BaseHTTPMiddleware):
+    """Protège toutes les routes sauf login/setup/auth-api/health."""
+    _PUBLIC = ("/login", "/setup", "/api/auth", "/health")
+
+    async def dispatch(self, request, call_next):
+        path = request.url.path
+
+        # Routes publiques — passe directement
+        if any(path == p or path.startswith(p + "/") or path.startswith(p + "?")
+               for p in self._PUBLIC):
+            return await call_next(request)
+
+        from watcher.auth import decode_session, COOKIE_NAME, is_setup_needed
+        token = request.cookies.get(COOKIE_NAME)
+        user  = decode_session(token) if token else None
+
+        if user is None:
+            # API → 401 JSON ; pages HTML → redirect
+            if path.startswith("/api/"):
+                return JSONResponse({"detail": "Non authentifié"}, status_code=401)
+            if is_setup_needed():
+                return RedirectResponse("/setup", status_code=302)
+            return RedirectResponse("/login", status_code=302)
+
+        # /admin/* réservé aux admins
+        if path.startswith("/admin") and user.get("role") != "admin":
+            return RedirectResponse("/app/", status_code=302)
+
+        request.state.user = user
+        return await call_next(request)
+
+
 app = FastAPI(
     title="MediaManager Watcher",
     description="Service de surveillance des fichiers vidéo",
@@ -245,8 +297,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(AuthMiddleware)
 
+app.include_router(auth_router)
 app.include_router(admin_router)
+
+# Pages auth (publiques)
+for _name, _dir, _path in [
+    ("login", "login", "/login"),
+    ("setup", "setup", "/setup"),
+]:
+    _p = PROJECT_ROOT / "frontend" / _dir
+    if _p.exists():
+        app.mount(_path, StaticFiles(directory=str(_p), html=True), name=_name)
+        logger.info(f"✓ {_name} frontend mounted at {_path}")
 
 # Frontend Admin
 static_path = PROJECT_ROOT / "frontend" / "admin"
@@ -258,7 +322,6 @@ else:
 
 @app.get("/admin")
 def admin_redirect():
-    from fastapi.responses import RedirectResponse
     return RedirectResponse(url="/admin/", status_code=307)
 
 # Frontend App utilisateur
@@ -271,7 +334,6 @@ else:
 
 @app.get("/app")
 def app_redirect():
-    from fastapi.responses import RedirectResponse
     return RedirectResponse(url="/app/", status_code=307)
 
 

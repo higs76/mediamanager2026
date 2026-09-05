@@ -54,6 +54,45 @@ SMB_DEFAULT_PASSWORD = os.getenv('SMB_DEFAULT_PASSWORD', 'password')
 _version_file = PROJECT_ROOT / 'VERSION'
 _version_str  = _version_file.read_text(encoding='utf-8').strip() if _version_file.exists() else ''
 IS_DEV         = '-dev' in _version_str or '-beta' in _version_str or '-rc' in _version_str
+# ==========================================
+# Auth / Sessions
+# ==========================================
+# Clé de signature des cookies de session.
+# Si SECRET_KEY n'est pas dans .env, on dérive une valeur stable depuis DATABASE_URL
+# (pas de configuration manuelle requise, mais moins sécurisé qu'une vraie clé).
+import hashlib as _hashlib
+SECRET_KEY = os.getenv("SECRET_KEY") or _hashlib.sha256(
+    f"mm_2026_session__{DATABASE_URL}".encode()
+).hexdigest()
+del _hashlib
+
 LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 LOG_LEVEL = 'DEBUG' if API_DEBUG else 'INFO'
 LOG_FILE = LOGS_PATH / 'mediamanager.log'
+
+
+def _get_log_retention_days() -> int:
+    """Rotation quotidienne (minuit) — nombre de jours d'historique conservés.
+    Sans rotation, le fichier grossit indéfiniment (constaté : 41 Mo / 522k lignes).
+
+    Lu depuis la table `config` (modifiable via l'UI Config) si la BDD est déjà
+    accessible ; sinon retombe sur .env / la valeur par défaut — ce code tourne
+    avant le reste du bootstrap (migrations pas encore appliquées au tout
+    premier démarrage), donc toute erreur ici doit rester silencieuse."""
+    default = int(os.getenv('LOG_RETENTION_DAYS', 14))
+    try:
+        from sqlalchemy import create_engine, text
+        _probe = create_engine(DATABASE_URL)
+        with _probe.connect() as conn:
+            row = conn.execute(text(
+                "SELECT value FROM config WHERE key = 'log_retention_days'"
+            )).fetchone()
+        _probe.dispose()
+        if row:
+            return int(row[0])
+    except Exception:
+        pass
+    return default
+
+
+LOG_RETENTION_DAYS = _get_log_retention_days()

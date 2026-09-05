@@ -43,6 +43,12 @@
       <button class="nav-item" data-tab="perf" onclick="switchTab('perf')">
         <i class="bi bi-stopwatch"></i> Perf
       </button>
+      <button class="nav-item" data-tab="users" onclick="switchTab('users')">
+        <i class="bi bi-people"></i> Utilisateurs
+      </button>
+      <button class="nav-item" data-tab="library" onclick="switchTab('library')">
+        <i class="bi bi-collection-play"></i> Bibliothèque
+      </button>
     </div>
   </div>
 
@@ -51,6 +57,16 @@
      <i class="bi bi-code-slash"></i> API
     </button>
     
+    <!-- Utilisateur connecté -->
+    <div class="current-user" id="current-user" title="Compte connecté">
+      <i class="bi bi-person-circle"></i>
+      <span id="nav-username">—</span>
+      <span class="nav-role" id="nav-role"></span>
+      <button class="btn-logout" onclick="authLogout()" title="Se déconnecter">
+        <i class="bi bi-box-arrow-right"></i>
+      </button>
+    </div>
+
     <!-- Infos système -->
     <div class="host-info">
       <span class="green-dot" id="conn-dot"></span>
@@ -86,94 +102,58 @@
       <div class="card"><div class="empty-state"><span class="spinner"></span></div></div>
     </div>
 
-    <!-- Panneau stats rétractable -->
-    <section class="stats-panel">
-      <div class="stats-header" onclick="toggleStats()">
-        <div class="stats-summary">
-          <div class="stats-title">
-            <i class="bi bi-bar-chart-steps"></i>
-            Vue d'ensemble
-          </div>
-          <span class="stats-divider">|</span>
-          <div class="stats-pill" title="Montages : montés / non montés / total">
-            <span class="lbl"><i class="bi bi-hdd-network"></i> Montages :</span>
-            <strong class="val-ok"  id="stat-mounts-up">0</strong>
-            <span class="slash">/</span>
-            <strong class="val-err" id="stat-mounts-down">0</strong>
-            <span class="slash">/</span>
-            <strong class="val-total" id="stat-mounts-total">0</strong>
-          </div>
-          <span class="stats-divider">|</span>
-          <div class="stats-pill" title="Fichiers : traités / en attente / total">
-            <span class="lbl"><i class="bi bi-files"></i> Fichiers :</span>
-            <strong class="val-ok"  id="stat-files-ok">—</strong>
-            <span class="slash">/</span>
-            <strong class="val-err" id="stat-files-wait">—</strong>
-            <span class="slash">/</span>
-            <strong class="val-total" id="stat-files-total">—</strong>
-          </div>
-          <span class="stats-divider">|</span>
-          <div class="stats-pill" id="stat-categories-pill">
-            <span class="lbl"><i class="bi bi-collection"></i> Catégories :</span>
-            <span id="stat-categories-list" class="text-muted">—</span>
-          </div>
-        </div>
-        <i class="bi bi-chevron-down stats-chevron" id="stats-chevron"></i>
+    <!-- Pipeline -->
+    <section class="mt-16">
+      <div class="section-bar">
+        <div class="section-title"><i class="bi bi-activity"></i> Pipeline</div>
       </div>
-      <div class="stats-content" id="stats-drawer">
-        <div class="stats-grid-detail">
-          <div class="stats-box">
-            <div class="stats-box-title">
-              <span>Flux de fichiers</span>
-              <span id="stat-files-pct" class="text-success">—</span>
-            </div>
-            <div class="stat-label" id="stat-files-label">—</div>
-            <div class="progress-bg"><div class="progress-fill" id="stat-files-bar" style="width:0%"></div></div>
-            <div class="progress-legend">
-              <span>Traités : <span id="stat-files-ok2">—</span></span>
-              <span>En attente : <span id="stat-files-wait2">—</span></span>
-            </div>
-            <div class="stat-meta">
-              Poids : <strong id="stat-files-size">—</strong><br>
-              Manquants : <strong id="stat-files-missing" class="text-warn">—</strong>
-              &nbsp;·&nbsp;
-              Doublons : <strong id="stat-files-duplicate" class="text-danger">—</strong>
-            </div>
-          </div>
-          <div class="stats-box">
-            <div class="stats-box-title"><span>Montages NAS</span></div>
-            <div class="stat-label" id="stat-mounts-label">—</div>
-            <div class="progress-bg"><div class="progress-fill progress-blue" id="stat-mounts-bar" style="width:0%"></div></div>
-            <div class="progress-legend">
-              <span>Montés : <span id="stat-mounts-up2">—</span></span>
-              <span>En erreur : <span id="stat-mounts-down2">—</span></span>
-            </div>
-          </div>
-          <div class="stats-box" id="stat-db-box">
-            <div class="stats-box-title"><span>Base de données</span></div>
-            <div id="stat-db-size" class="text-sm">—</div>
-            <div class="stat-hint">
-              Taille PostgreSQL
-            </div>
-          </div>
+      <div class="services-list" id="pipeline-list">
+        <div class="empty-state"><span class="spinner"></span></div>
+      </div>
+    </section>
 
-          <div class="stats-box">
-            <div class="stats-box-title">
-              <span>Jobs</span>
-              <span id="jobs-indicator" class="text-xs"></span>
-            </div>
-            <div id="jobs-detail" class="stat-detail">
-              —
-            </div>
+    <!-- Bibliothèque — progression de l'analyse -->
+    <section class="lib-section">
+      <div class="lib-header">
+        <div class="lib-title"><i class="bi bi-collection-play"></i> Bibliothèque</div>
+        <div class="lib-header-right">
+          <div class="lib-trash-badge lib-alert-hidden" id="lib-trash-badge" title="Espace récupérable en vidant les corbeilles NAS">
+            <i class="bi bi-trash3"></i> <span id="lib-trash-size">—</span>
           </div>
-          <div class="stats-box">
-              <div class="stats-box-title">BIBLIOTHÈQUE</div>
-              <div class="stat-value" id="stat-lib-titles">—</div>
-              <div class="stat-hint">Titres détectés</div>
-              <div class="stat-sub">
-                Durée totale : <strong id="stat-lib-hours">—</strong>
-              </div>
-          </div>
+          <div class="lib-size" id="lib-size">—</div>
+        </div>
+      </div>
+      <div class="lib-progress-row">
+        <div class="lib-count" id="lib-label">—</div>
+        <div class="lib-pct" id="lib-pct">—</div>
+      </div>
+      <div class="progress-bg lib-bar-bg">
+        <div class="progress-fill" id="lib-bar" style="width:0%"></div>
+      </div>
+      <div class="lib-status-row">
+        <div class="lib-stat lib-stat-ok">
+          <div class="lib-stat-label"><i class="bi bi-check-circle-fill"></i> Analysés</div>
+          <strong id="lib-analyzed">—</strong>
+        </div>
+        <div class="lib-stat lib-stat-wait">
+          <div class="lib-stat-label"><i class="bi bi-hourglass-split"></i> En attente</div>
+          <strong id="lib-pending">—</strong>
+        </div>
+        <div class="lib-stat lib-stat-err">
+          <div class="lib-stat-label"><i class="bi bi-x-circle-fill"></i> Erreurs</div>
+          <strong id="lib-error">—</strong>
+        </div>
+      </div>
+      <div class="lib-alerts-row">
+        <div class="lib-alert lib-alert-warn" id="lib-missing-block">
+          <i class="bi bi-exclamation-triangle-fill"></i>
+          <span>Manquants : <strong id="lib-missing">—</strong></span>
+          <button class="btn btn-xs" onclick="goToLibraryStatus('missing')">Voir</button>
+        </div>
+        <div class="lib-alert lib-alert-danger" id="lib-duplicate-block">
+          <i class="bi bi-copy"></i>
+          <span>Doublons : <strong id="lib-duplicate">—</strong></span>
+          <button class="btn btn-xs" onclick="goToLibraryStatus('duplicate')">Voir</button>
         </div>
       </div>
     </section>
@@ -182,7 +162,7 @@
     <section>
       <div class="section-bar">
         <div>
-          <div class="section-title">Montages NAS</div>
+          <div class="section-title">Montages NAS <span id="mount-summary" class="mount-summary"></span></div>
           <div class="section-sub">Source de vérité en base de données — les changements s'appliquent via « Appliquer &amp; Synchro »</div>
         </div>
         <div class="section-actions">
@@ -237,24 +217,39 @@
 
   <!-- ── LOGS ─────────────────────────────────────────────────────────────── -->
   <div id="panel-logs" class="tab-panel">
+
     <div class="card">
       <div class="card-header"><i class="bi bi-terminal"></i> Journal du service</div>
       <div class="log-controls">
-        <label for="log-lines" class="text-sm text-muted">Lignes :</label>
+        <label class="text-sm text-muted">Niveau :</label>
+        <select id="log-level" class="select-sm" onchange="loadLogs()">
+          <option value="">Tous</option>
+          <option value="ERROR">ERROR</option>
+          <option value="WARNING">WARNING</option>
+          <option value="INFO">INFO</option>
+          <option value="DEBUG">DEBUG</option>
+        </select>
+        <label class="text-sm text-muted">Module :</label>
+        <select id="log-module" class="select-sm" onchange="loadLogs()">
+          <option value="">Tous</option>
+        </select>
+        <label class="text-sm text-muted">Lignes :</label>
         <select id="log-lines" class="select-sm" onchange="loadLogs()">
-          <option value="50" selected>50</option>
-          <option value="100">100</option>
+          <option value="50">50</option>
+          <option value="100" selected>100</option>
           <option value="200">200</option>
+          <option value="500">500</option>
         </select>
         <button class="btn btn-sm" onclick="loadLogs()">
           <i class="bi bi-arrow-clockwise"></i> Rafraîchir
         </button>
-        <span class="text-75 text-muted ms-auto">Auto-refresh 5s</span>
+        <span class="text-75 text-muted ms-auto" id="log-refresh-label">Auto-refresh</span>
       </div>
-      <div class="log-box" id="log-box">
-        <div class="log-line">Chargement…</div>
+      <div class="log-box log-structured" id="log-box">
+        <div class="log-line log-full">Chargement…</div>
       </div>
     </div>
+
   </div>
 
   <!-- ══ PANEL : Statistiques ══════════════════════════════════════════════ -->
@@ -524,6 +519,88 @@
         </div>
       </div>
     </div>
+  </div>
+
+  <!-- ── UTILISATEURS ───────────────────────────────────────────────────────── -->
+  <div id="panel-users" class="tab-panel">
+    <div class="page-header">
+      <h2>Utilisateurs</h2>
+      <button class="btn btn-primary btn-sm" onclick="Users.openAdd()">
+        <i class="bi bi-plus-lg"></i> Ajouter
+      </button>
+    </div>
+
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Nom d'utilisateur</th>
+            <th>Rôle</th>
+            <th>Créé le</th>
+            <th class="th-actions">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="users-tbody">
+          <tr><td colspan="4"><div class="empty-state"><span class="spinner"></span></div></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── BIBLIOTHÈQUE (FICHIERS) ──────────────────────────────────────── -->
+  <div id="panel-library" class="tab-panel">
+
+    <!-- Corbeilles NAS détectées — espace récupérable -->
+    <div class="lb-trash-banner lb-hidden" id="lb-trash-banner"></div>
+
+    <!-- Barre outils -->
+    <div class="lb-toolbar">
+      <select class="lb-cat-select" id="lb-cat-select" onchange="Library.setCat(this.value)">
+        <option value="">Toutes les catégories</option>
+      </select>
+      <span class="lb-count" id="lb-count">—</span>
+      <button class="btn btn-sm" onclick="Library.reanalyze()" title="Force la ré-extraction des métadonnées (codec, bitrate, pistes...)">
+        <i class="bi bi-arrow-repeat"></i> Réanalyser
+      </button>
+      <button class="btn btn-sm btn-danger" onclick="Library.cleanMissing()" title="Supprime définitivement les fichiers marqués manquant">
+        <i class="bi bi-trash3"></i> Nettoyer les manquants
+      </button>
+      <button class="btn btn-sm" onclick="Library.reset()">
+        <i class="bi bi-x-circle"></i> Réinitialiser
+      </button>
+    </div>
+
+    <!-- Filtres chips -->
+    <div class="section-title lb-filters-title"><i class="bi bi-funnel"></i> Filtres — cliquer pour affiner</div>
+    <div class="lb-filters" id="lb-filters">
+      <div class="lb-filter-row">
+        <span class="lb-filter-label">—</span>
+        <div class="lb-chips"><span class="spinner"></span></div>
+      </div>
+    </div>
+
+    <!-- Table de fichiers -->
+    <div class="lb-table-wrap">
+      <table class="lb-table">
+        <thead>
+          <tr>
+            <th>Fichier</th>
+            <th>Rés.</th>
+            <th>Codec</th>
+            <th>HDR</th>
+            <th>Audio</th>
+            <th>ST</th>
+            <th class="lb-th-right">Taille</th>
+          </tr>
+        </thead>
+        <tbody id="lb-body">
+          <tr><td colspan="7" class="lb-loader"><span class="spinner"></span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Pagination -->
+    <div class="lb-pag-wrap" id="lb-pag"></div>
   </div>
 
 </main>
@@ -1004,10 +1081,69 @@
   </div>
 </div>
 
+<!-- ══ MODAL : Ajout utilisateur ════════════════════════════════════════════ -->
+<div class="modal-overlay" id="overlay-user-add">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <h3>Ajouter un utilisateur</h3>
+      <button class="modal-close" onclick="Users.closeAdd()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">Nom d'utilisateur <span class="req">*</span></label>
+        <input id="add-username" type="text">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Rôle</label>
+        <select id="add-role">
+          <option value="viewer">Viewer — accès bibliothèque</option>
+          <option value="admin">Admin — accès complet</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Mot de passe <span class="req">*</span></label>
+        <input id="add-password" type="password">
+      </div>
+      <div id="add-user-error" class="modal-error"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="Users.closeAdd()">Annuler</button>
+      <button class="btn btn-success" onclick="Users.submitAdd()">
+        <i class="bi bi-person-plus"></i> Créer
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ MODAL : Changement mot de passe ══════════════════════════════════════ -->
+<div class="modal-overlay" id="overlay-user-pwd">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <h3>Changer le mot de passe — <strong id="pwd-username"></strong></h3>
+      <button class="modal-close" onclick="Users.closePwd()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">Nouveau mot de passe <span class="req">*</span></label>
+        <input id="pwd-new" type="password">
+      </div>
+      <div id="pwd-error" class="modal-error"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="Users.closePwd()">Annuler</button>
+      <button class="btn btn-primary" onclick="Users.submitPwd()">
+        <i class="bi bi-key"></i> Enregistrer
+      </button>
+    </div>
+  </div>
+</div>
+
+<script src="shared.js"></script>
 <script src="admin.js"></script>
 <script src="mounts.js"></script>
 <script src="stats.js"></script>
 <script src="config.js"></script>
 <script src="perf.js"></script>
+<script src="library.js"></script>
 </body>
 </html>

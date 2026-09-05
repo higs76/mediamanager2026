@@ -300,6 +300,121 @@ CREATE INDEX IF NOT EXISTS idx_metadata_file ON video_metadata(file_id);
 
 
 -- ============================================================
+-- TABLE: codecs
+-- Référentiel des codecs vidéo et audio, auto-découverts à l'analyse.
+-- codec_type : 'video' | 'audio'
+-- ============================================================
+CREATE TABLE IF NOT EXISTS codecs (
+    id           SERIAL PRIMARY KEY,
+    name         VARCHAR(50) UNIQUE NOT NULL,
+    display_name VARCHAR(100),
+    codec_type   VARCHAR(10) NOT NULL CHECK (codec_type IN ('video', 'audio'))
+);
+
+
+-- ============================================================
+-- TABLE: languages
+-- Référentiel ISO 639-2 des langues (partagé audio + sous-titres).
+-- ============================================================
+CREATE TABLE IF NOT EXISTS languages (
+    id    SERIAL PRIMARY KEY,
+    code  CHAR(3) UNIQUE NOT NULL,
+    label VARCHAR(100) NOT NULL
+);
+
+
+-- ============================================================
+-- TABLE: hdr_formats
+-- Référentiel des formats HDR (HDR10, DV, HLG…).
+-- Absence d'entrée dans file_hdr_formats = fichier SDR.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS hdr_formats (
+    id           SERIAL PRIMARY KEY,
+    name         VARCHAR(30) UNIQUE NOT NULL,
+    display_name VARCHAR(50)
+);
+
+
+-- ============================================================
+-- TABLE: audio_tracks
+-- Pistes audio normalisées (1 ligne = 1 piste).
+-- ============================================================
+CREATE TABLE IF NOT EXISTS audio_tracks (
+    id          SERIAL PRIMARY KEY,
+    file_id     INTEGER NOT NULL REFERENCES media_files(id) ON DELETE CASCADE,
+    track_order SMALLINT NOT NULL,
+    codec_id    INTEGER REFERENCES codecs(id),
+    language_id INTEGER REFERENCES languages(id),
+    profile     VARCHAR(100),
+    channels    SMALLINT,
+    layout      VARCHAR(30),
+    bitrate     INTEGER,
+    is_default  BOOLEAN NOT NULL DEFAULT false,
+    UNIQUE (file_id, track_order)
+);
+
+CREATE INDEX IF NOT EXISTS idx_audio_tracks_file  ON audio_tracks(file_id);
+CREATE INDEX IF NOT EXISTS idx_audio_tracks_codec ON audio_tracks(codec_id);
+CREATE INDEX IF NOT EXISTS idx_audio_tracks_lang  ON audio_tracks(language_id);
+
+
+-- ============================================================
+-- TABLE: subtitle_tracks
+-- Pistes sous-titres normalisées.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS subtitle_tracks (
+    id          SERIAL PRIMARY KEY,
+    file_id     INTEGER NOT NULL REFERENCES media_files(id) ON DELETE CASCADE,
+    track_order SMALLINT NOT NULL,
+    language_id INTEGER REFERENCES languages(id),
+    title       VARCHAR(100),
+    is_default  BOOLEAN NOT NULL DEFAULT false,
+    is_forced   BOOLEAN NOT NULL DEFAULT false,
+    UNIQUE (file_id, track_order)
+);
+
+CREATE INDEX IF NOT EXISTS idx_subtitle_tracks_file ON subtitle_tracks(file_id);
+CREATE INDEX IF NOT EXISTS idx_subtitle_tracks_lang ON subtitle_tracks(language_id);
+
+
+-- ============================================================
+-- TABLE: file_hdr_formats
+-- Liaison N-N entre fichiers et formats HDR.
+-- Un fichier DV embarque souvent aussi HDR10 → plusieurs lignes.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS file_hdr_formats (
+    file_id       INTEGER NOT NULL REFERENCES media_files(id) ON DELETE CASCADE,
+    hdr_format_id INTEGER NOT NULL REFERENCES hdr_formats(id),
+    PRIMARY KEY (file_id, hdr_format_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_file_hdr_file ON file_hdr_formats(file_id);
+
+-- video_codec_id : FK vers codecs — déclarée après codecs pour respecter l'ordre
+ALTER TABLE video_metadata
+    ADD COLUMN IF NOT EXISTS video_codec_id INTEGER REFERENCES codecs(id);
+
+
+-- ============================================================
+-- TABLE: trash_folders
+-- Dossiers corbeille NAS détectés (ex: #recycle Synology).
+-- Mesurés (taille + nb fichiers) par le scanner mais jamais
+-- catalogués — sert uniquement à estimer l'espace récupérable.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS trash_folders (
+    id            SERIAL PRIMARY KEY,
+    mount_id      INTEGER NOT NULL REFERENCES mounts(id) ON DELETE CASCADE,
+    path_relative VARCHAR(1000) NOT NULL,
+    size_bytes    BIGINT  NOT NULL DEFAULT 0,
+    file_count    INTEGER NOT NULL DEFAULT 0,
+    last_seen_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (mount_id, path_relative)
+);
+
+CREATE INDEX IF NOT EXISTS idx_trash_folders_mount ON trash_folders(mount_id);
+
+
+-- ============================================================
 -- TABLE: rename_proposals
 -- Gérée par la migration 002 (structure enrichie).
 -- Ce bloc est intentionnellement vide pour éviter les conflits.
@@ -317,3 +432,6 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
     version     VARCHAR(60) PRIMARY KEY,
     applied_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Élargit la colonne sur les installations existantes (était VARCHAR(20))
+ALTER TABLE schema_migrations ALTER COLUMN version TYPE VARCHAR(60);

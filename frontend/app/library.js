@@ -6,6 +6,7 @@
 const Library = (() => {
 
   let _categories   = [];
+  let _trash        = null;
   let _currentCat   = null;
   let _currentTitle = null;
   let _offset       = 0;
@@ -25,13 +26,41 @@ const Library = (() => {
     el.innerHTML = `<div class="empty-state"><span class="spinner"></span></div>`;
 
     try {
-      const r = await fetch(`${API}/api/admin/library/categories/stats`);
-      _categories = await r.json();
+      const [catRes, trashRes] = await Promise.all([
+        fetch(`${API}/api/admin/library/categories/stats`),
+        fetch(`${API}/api/admin/library/trash`).catch(() => null),
+      ]);
+      _categories = await catRes.json();
+      _trash      = trashRes && trashRes.ok ? await trashRes.json() : null;
       _renderCategories();
     } catch(e) {
       el.innerHTML = `<div class="empty-state">
         <i class="bi bi-wifi-off"></i> Erreur de chargement</div>`;
     }
+  }
+
+  function _fmtBytes(bytes) {
+    if (!bytes) return '0 Go';
+    if (bytes >= 1099511627776) return (bytes / 1099511627776).toFixed(1).replace('.', ',') + ' To';
+    if (bytes >= 1073741824)    return (bytes / 1073741824).toFixed(1).replace('.', ',') + ' Go';
+    if (bytes >= 1048576)       return (bytes / 1048576).toFixed(0) + ' Mo';
+    return bytes + ' o';
+  }
+
+  function _trashBannerHtml() {
+    if (!_trash || !_trash.folders || !_trash.folders.length) return '';
+    const n = _trash.folders.length;
+    const sizeLabel = _fmtBytes(_trash.total_bytes);
+    return `
+      <div class="trash-banner">
+        <i class="bi bi-trash3"></i>
+        <span>
+          <strong>${n} dossier${n > 1 ? 's' : ''} corbeille</strong>
+          détecté${n > 1 ? 's' : ''} sur le NAS —
+          <span class="trash-banner-size">${sizeLabel}</span> récupérables
+          en vidant la corbeille.
+        </span>
+      </div>`;
   }
 
   function _renderCategories() {
@@ -48,6 +77,7 @@ const Library = (() => {
       <div class="breadcrumb">
         <i class="bi bi-house"></i> Bibliothèque
       </div>
+      ${_trashBannerHtml()}
       <div class="cat-grid">
         ${visible.map(c => _categoryCardHtml(c)).join('')}
       </div>`;
@@ -164,8 +194,9 @@ const Library = (() => {
   function _updateTitlesArea(items) {
     const countEl = document.getElementById('lib-count');
     if (countEl) countEl.textContent = _countLabel();
-    const pagEl = document.getElementById('lib-pagination');
-    if (pagEl) pagEl.innerHTML = _paginationHtml();
+    document.querySelectorAll('#lib-pagination, #lib-pagination-bottom').forEach(el => {
+      el.innerHTML = _paginationHtml();
+    });
     const list = document.getElementById('titles-list');
     if (list) list.innerHTML = _titlesHtml(items);
   }
@@ -312,6 +343,10 @@ const Library = (() => {
 
       <div id="titles-list">
         ${_titlesHtml(titles)}
+      </div>
+
+      <div class="lib-toolbar lib-toolbar-bottom">
+        <div id="lib-pagination-bottom" class="lib-pagination">${_paginationHtml()}</div>
       </div>`;
   }
 
@@ -425,56 +460,68 @@ const Library = (() => {
       return `<div class="empty-state"><i class="bi bi-file-x"></i> Aucun fichier</div>`;
     }
 
+    // Le bonus a son propre bloc repliable (comme une saison) — jamais mélangé
+    // au contenu principal, qu'il y ait des saisons ou non (film unique).
+    const bonusEntry     = entries.find(([k]) => k === 'bonus');
+    const regularEntries = entries.filter(([k]) => k !== 'bonus');
+    const bonusHtml      = bonusEntry ? _seasonBlockHtml('bonus', bonusEntry[1]) : '';
+
     if (!t.has_seasons) {
-      const items = entries.flatMap(([,v]) => v.items);
-      return `<div class="card card-flush-t">${_renderItems(items, false)}</div>`;
+      // Même traitement visuel que le corps d'une saison (fond distinct, marges),
+      // pas de header saison puisqu'il n'y a rien à replier pour le contenu principal.
+      const items = regularEntries.flatMap(([,v]) => v.items);
+      return `<div class="tree-item"><div class="tree-body open">${_renderItems(items, false)}</div></div>` + bonusHtml;
     }
 
-    return entries.map(([season, data]) => {
-      const sNum   = season === 'null' ? null : parseInt(season);
-      const sLabel = sNum === null ? 'Sans saison'
-                   : sNum === 0   ? 'Spéciaux'
-                   : `Saison ${String(sNum).padStart(2,'0')}`;
-      const toRen  = data.items.filter(i => i.file_status === 'to_rename').length;
-      const props  = data.items.filter(i => i.prop_id).length;
+    return regularEntries.map(([season, data]) => _seasonBlockHtml(season, data)).join('') + bonusHtml;
+  }
 
-      const sizeLabel = data.size_gb >= 1024
-        ? `${(data.size_gb/1024).toFixed(2)} To`
-        : `${data.size_gb} Go`;
+  function _seasonBlockHtml(season, data) {
+    const isBonus = season === 'bonus';
+    const sNum    = season === 'null' ? null : parseInt(season);
+    const sLabel  = isBonus ? 'Bonus'
+                  : sNum === null ? 'Sans saison'
+                  : sNum === 0    ? 'Spéciaux'
+                  : `Saison ${String(sNum).padStart(2,'0')}`;
+    const toRen  = data.items.filter(i => i.file_status === 'to_rename').length;
+    const props  = data.items.filter(i => i.prop_id).length;
 
-      const propBadgeS = props > 0
-        ? `<span class="badge badge-warn badge-block-b">${props} proposition${props > 1 ? 's' : ''}</span>` : '';
+    const sizeLabel = data.size_gb >= 1024
+      ? `${(data.size_gb/1024).toFixed(2)} To`
+      : `${data.size_gb} Go`;
 
-      return `<div class="tree-item">
-        <div class="season-row" onclick="toggleTree(this.parentElement.querySelector('.tree-body'), this.querySelector('.tree-chevron'))">
-          <div class="season-info">
-            <div class="season-name">${esc(sLabel)}</div>
-            ${propBadgeS}
-            ${toRen > 0 ? `<span class="badge badge-warn badge-block-b" style="margin-left:4px">${toRen} à renommer</span>` : ''}
-            <div class="season-file-count">${data.file_count} fichier${data.file_count>1?'s':''}</div>
-            ${_watchProgress(data.watched_pct)}
-          </div>
-          <div class="season-stats">
-            <div class="stat-block-label">Résolutions</div>
-            ${_statBars(data.resolutions, 'res')}
-          </div>
-          <div class="season-stats">
-            <div class="stat-block-label">Codecs</div>
-            ${_statBars(data.codecs, 'codec')}
-          </div>
-          <div class="season-right">
-            <div class="weight-pill weight-pill-sm">
-              <i class="bi bi-database-fill"></i>
-              ${sizeLabel}
-            </div>
-            <i class="bi bi-chevron-right tree-chevron"></i>
-          </div>
+    const propBadgeS = props > 0
+      ? `<span class="badge badge-warn badge-block-b">${props} proposition${props > 1 ? 's' : ''}</span>` : '';
+
+    return `<div class="tree-item${isBonus ? ' tree-item-bonus' : ''}">
+      <div class="season-row" onclick="toggleTree(this.parentElement.querySelector('.tree-body'), this.querySelector('.tree-chevron'))">
+        <div class="season-info">
+          <div class="season-name">${isBonus ? '<i class="bi bi-gift-fill bonus-icon"></i> ' : ''}${esc(sLabel)}</div>
+          ${propBadgeS}
+          ${toRen > 0 ? `<span class="badge badge-warn badge-block-b" style="margin-left:4px">${toRen} à renommer</span>` : ''}
+          <div class="season-file-count">${data.file_count} fichier${data.file_count>1?'s':''}</div>
+          ${_watchProgress(data.watched_pct)}
         </div>
-        <div class="tree-body">
-          ${_renderItems(data.items, true)}
+        <div class="season-stats">
+          <div class="stat-block-label">Résolutions</div>
+          ${_statBars(data.resolutions, 'res')}
         </div>
-      </div>`;
-    }).join('');
+        <div class="season-stats">
+          <div class="stat-block-label">Codecs</div>
+          ${_statBars(data.codecs, 'codec')}
+        </div>
+        <div class="season-right">
+          <div class="weight-pill weight-pill-sm">
+            <i class="bi bi-database-fill"></i>
+            ${sizeLabel}
+          </div>
+          <i class="bi bi-chevron-right tree-chevron"></i>
+        </div>
+      </div>
+      <div class="tree-body">
+        ${_renderItems(data.items, true)}
+      </div>
+    </div>`;
   }
 
   function _renderItems(items, showEp) {
@@ -591,33 +638,30 @@ const Library = (() => {
   }
 
   function _audioTracksHtml(audio) {
-    const codecs = audio?.codecs || [];
-    if (!codecs.length) {
+    const tracks = audio?.tracks || [];
+    if (!tracks.length) {
       return `<div class="stat-blank">Aucune piste audio</div>`;
     }
-    const n = codecs.length;
+    const n = tracks.length;
     const cols = `72px ${Array(n).fill('1fr').join(' ')}`;
 
-    const headerCells = codecs.map((_, i) =>
-      `<div class="audio-track-header">Piste ${i + 1}</div>`).join('');
+    const headerCells = tracks.map((t, i) =>
+      `<div class="audio-track-header">Piste ${i + 1}${t.is_default ? ' ★' : ''}</div>`).join('');
 
-    const langRow = codecs.map((_, i) =>
-      `<div class="audio-track-value">${esc((audio.languages?.[i] || '?').toUpperCase())}</div>`).join('');
+    const langRow = tracks.map(t =>
+      `<div class="audio-track-value" title="${esc((t.lang || '').toUpperCase())}">${esc(t.lang_label || (t.lang || '?').toUpperCase())}</div>`).join('');
 
-    const fmtRow = codecs.map((_, i) =>
-      `<div class="audio-track-format">${esc(audio.formats?.[i] || codecs[i].toUpperCase())}</div>`).join('');
+    const fmtRow = tracks.map(t =>
+      `<div class="audio-track-format">${esc(t.format || (t.codec || '?').toUpperCase())}</div>`).join('');
 
-    const chanRow = codecs.map((_, i) =>
-      `<div class="audio-track-value">${esc(audio.layouts?.[i] || audio.channels?.[i] || '?')}</div>`).join('');
+    const chanRow = tracks.map(t =>
+      `<div class="audio-track-value">${esc(t.layout || t.channels || '?')}</div>`).join('');
 
-    const layoutRow = codecs.map((_, i) => {
-      const diagram = _speakerDiagram(audio.layouts?.[i]);
-      return `<div class="audio-track-value">${diagram}</div>`;
-    }).join('');
+    const layoutRow = tracks.map(t =>
+      `<div class="audio-track-value">${_speakerDiagram(t.layout)}</div>`).join('');
 
-    const brRow = codecs.map((_, i) => {
-      const br = audio.bitrates?.[i];
-      const label = br ? `${Math.round(br / 1000)} kb/s` : '—';
+    const brRow = tracks.map(t => {
+      const label = t.bitrate ? `${Math.round(t.bitrate / 1000)} kb/s` : '—';
       return `<div class="audio-track-bitrate">${label}</div>`;
     }).join('');
 
@@ -631,6 +675,61 @@ const Library = (() => {
     </div>`;
   }
 
+  function _subtitleTracksHtml(subtitles) {
+    const tracks = subtitles?.tracks || [];
+    if (!tracks.length) {
+      return `<div class="stat-blank">Aucune piste de sous-titres</div>`;
+    }
+    // Le tag "title" (ex: "Fr Forced" / "Fr Full") distingue des pistes
+    // partageant la même langue — is_forced n'est pas toujours fiable côté mux.
+    return `<div class="sub-tracks-list">
+      ${tracks.map((t, i) => `
+        <div class="sub-track-row">
+          <span class="sub-track-lang" title="${esc((t.lang || '').toUpperCase())}">${esc(t.label || (t.lang || '?').toUpperCase())}</span>
+          <span class="sub-track-title">${esc(t.title || `Piste ${i + 1}`)}</span>
+          <span class="sub-track-badges">
+            ${t.is_default ? '<span class="track-badge track-badge-default">Défaut</span>' : ''}
+            ${t.is_forced  ? '<span class="track-badge track-badge-forced">Forcé</span>'   : ''}
+          </span>
+        </div>`).join('')}
+    </div>`;
+  }
+
+  // Épisode précédent/suivant dans la même saison (à partir des données de
+  // _currentTitle déjà chargées — pas de requête réseau supplémentaire).
+  function _siblingItems(item) {
+    if (!_currentTitle || _currentTitle.id !== item.title_id) return { prev: null, next: null };
+    const seasonData = _currentTitle.seasons?.[String(item.season)];
+    const items = seasonData?.items || [];
+    const idx = items.findIndex(i => i.item_id === item.item_id);
+    if (idx === -1) return { prev: null, next: null };
+    return {
+      prev: idx > 0 ? items[idx - 1] : null,
+      next: idx < items.length - 1 ? items[idx + 1] : null,
+    };
+  }
+
+  function _itemNavHtml(prev, next) {
+    if (!prev && !next) return '';
+    const label = (i) => {
+      if (i.season !== null && i.episode !== null) {
+        return `${String(i.season).padStart(2,'0')}x${String(i.episode).padStart(2,'0')}`;
+      }
+      return esc(i.episode_title || i.filename);
+    };
+    const prevBtn = prev
+      ? `<button class="btn btn-sm item-nav-btn" onclick="Library.openItem(${prev.item_id})" title="${esc(prev.episode_title || prev.filename)}">
+           <i class="bi bi-chevron-left"></i> ${label(prev)}
+         </button>`
+      : `<button class="btn btn-sm item-nav-btn" disabled><i class="bi bi-chevron-left"></i> Précédent</button>`;
+    const nextBtn = next
+      ? `<button class="btn btn-sm item-nav-btn" onclick="Library.openItem(${next.item_id})" title="${esc(next.episode_title || next.filename)}">
+           ${label(next)} <i class="bi bi-chevron-right"></i>
+         </button>`
+      : `<button class="btn btn-sm item-nav-btn" disabled>Suivant <i class="bi bi-chevron-right"></i></button>`;
+    return `<div class="item-nav-row">${prevBtn}${nextBtn}</div>`;
+  }
+
   function _renderItemDetail(item) {
     const el  = document.getElementById('library-content');
     const cat = _currentCat;
@@ -640,6 +739,7 @@ const Library = (() => {
       : null;
 
     const displayTitle = item.episode_title || item.filename;
+    const { prev, next } = _siblingItems(item);
 
     const sizeLabel = item.size_bytes
       ? (item.size_bytes / 1073741824 >= 1
@@ -695,6 +795,8 @@ const Library = (() => {
         </button>
       </div>
 
+      ${_itemNavHtml(prev, next)}
+
       <div class="item-detail-grid item-detail-grid-vertical">
 
         <div class="item-detail-section">
@@ -746,8 +848,8 @@ const Library = (() => {
           <div class="item-detail-row">
             <span class="item-detail-label">HDR</span>
             <span class="item-detail-value">
-              ${item.video?.hdr_format && item.video.hdr_format !== 'SDR'
-                ? `<span class="hdr-badge">${esc(item.video.hdr_format)}</span>`
+              ${(item.video?.hdr_formats || []).length
+                ? item.video.hdr_formats.map(h => `<span class="hdr-badge">${esc(h)}</span>`).join(' ')
                 : 'SDR'}
             </span>
           </div>
@@ -761,7 +863,7 @@ const Library = (() => {
           <div class="item-detail-section-title">
             <i class="bi bi-volume-up"></i> Audio
             <span class="audio-count">
-              ${item.audio?.codecs?.length || 0} piste${(item.audio?.codecs?.length||0) > 1 ? 's' : ''}
+              ${item.audio?.tracks?.length || 0} piste${(item.audio?.tracks?.length||0) > 1 ? 's' : ''}
             </span>
           </div>
           ${_audioTracksHtml(item.audio)}
@@ -770,15 +872,11 @@ const Library = (() => {
         <div class="item-detail-section">
           <div class="item-detail-section-title">
             <i class="bi bi-chat-square-text"></i> Sous-titres
+            <span class="audio-count">
+              ${item.subtitles?.count || 0} piste${(item.subtitles?.count||0) > 1 ? 's' : ''}
+            </span>
           </div>
-          <div class="item-detail-row">
-            <span class="item-detail-label">Nombre de pistes</span>
-            <span class="item-detail-value">${item.subtitles?.count ?? 0}</span>
-          </div>
-          <div class="item-detail-row">
-            <span class="item-detail-label">Langues</span>
-            <span class="item-detail-value">${item.subtitles?.languages?.join(', ') || 'Aucune'}</span>
-          </div>
+          ${_subtitleTracksHtml(item.subtitles)}
         </div>
 
       </div>

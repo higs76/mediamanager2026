@@ -8,6 +8,7 @@ import os
 import socket
 import subprocess
 import tempfile
+import threading
 from typing import Optional
 
 from fastapi import APIRouter, Body, HTTPException
@@ -230,6 +231,137 @@ def _do_umount(local_path: str) -> tuple:
         return r.returncode == 0, r.stderr.strip()
     except Exception as e:
         return False, str(e)
+
+
+# ── Auto-remontage ────────────────────────────────────────────────────────────
+
+def _fetch_active_mount_rows(conn):
+    """Récupère tous les montages actifs avec leurs paramètres complets (dont mot de passe)."""
+    return conn.execute(text("""
+        SELECT m.id, m.mount_type, m.local_path,
+               s.server, s.share, s.username, s.password,
+               s.domain, s.smb_version, s.mount_options AS smb_options,
+               n.server AS nfs_server, n.export_path,
+               n.nfs_version, n.mount_options AS nfs_options
+        FROM mounts m
+        LEFT JOIN mount_smb s ON s.mount_id = m.id
+        LEFT JOIN mount_nfs n ON n.mount_id = m.id
+        WHERE m.active = true
+    """)).mappings().fetchall()
+
+
+def _build_mount_params(r) -> dict:
+    if r["mount_type"] == "smb":
+        return {
+            "server": r["server"], "share": r["share"],
+            "username": r["username"], "password": r["password"],
+            "domain": r["domain"], "smb_version": r["smb_version"],
+            "mount_options": r["smb_options"],
+        }
+    return {
+        "server": r["nfs_server"], "export_path": r["export_path"],
+        "nfs_version": r["nfs_version"], "mount_options": r["nfs_options"],
+    }
+
+
+def remount_all_active() -> dict:
+    """Monte tous les montages actifs non encore montés. Appelé au démarrage du service."""
+    added, errors = [], []
+    try:
+        with engine.connect() as conn:
+            rows = _fetch_active_mount_rows(conn)
+            for r in rows:
+                local_path = r["local_path"]
+                if _is_mounted(local_path):
+                    continue
+                ok, err = _do_mount(local_path, r["mount_type"], _build_mount_params(r))
+                if ok:
+                    added.append(local_path)
+                    conn.execute(text(
+                        "UPDATE mounts SET last_mount_at=NOW(), last_error=NULL WHERE id=:id"
+                    ), {"id": r["id"]})
+                    logger.info(f"✓ Montage restauré au démarrage : {local_path}")
+                else:
+                    errors.append({"path": local_path, "error": err})
+                    conn.execute(text(
+                        "UPDATE mounts SET last_error=:e WHERE id=:id"
+                    ), {"e": err, "id": r["id"]})
+                    logger.error(f"✗ Remontage échoué {local_path} : {err}")
+            conn.commit()
+    except Exception as e:
+        logger.error(f"remount_all_active : {e}")
+    return {"added": added, "errors": errors}
+
+
+class MountWatchdog:
+    """Thread daemon : vérifie les montages NAS périodiquement et remonte si nécessaire."""
+
+    _DEFAULT_INTERVAL = 300  # secondes
+
+    def __init__(self):
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._state: dict = {}  # {local_path: bool} — dernier état connu
+        self._interval = self._DEFAULT_INTERVAL
+
+    def start(self):
+        from watcher.config_db import get_config
+        try:
+            self._interval = max(60, int(get_config("mount_watchdog_interval", str(self._DEFAULT_INTERVAL))))
+        except (ValueError, Exception):
+            self._interval = self._DEFAULT_INTERVAL
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True, name="mount-watchdog")
+        self._thread.start()
+        logger.info(f"✓ MountWatchdog démarré (intervalle {self._interval}s)")
+
+    def stop(self):
+        self._stop_event.set()
+
+    def _run(self):
+        while not self._stop_event.wait(self._interval):
+            self._check()
+
+    def _check(self):
+        try:
+            with engine.connect() as conn:
+                rows = _fetch_active_mount_rows(conn)
+                for r in rows:
+                    local_path = r["local_path"]
+                    is_ok = _is_mounted(local_path)
+                    was_ok = self._state.get(local_path)
+
+                    if is_ok:
+                        if was_ok is False:
+                            logger.info(f"✓ Montage de nouveau accessible : {local_path}")
+                        self._state[local_path] = True
+                        continue
+
+                    if was_ok is not False:
+                        logger.warning(f"⚠ Montage perdu, tentative de remontage : {local_path}")
+
+                    ok, err = _do_mount(local_path, r["mount_type"], _build_mount_params(r))
+                    if ok:
+                        self._state[local_path] = True
+                        conn.execute(text(
+                            "UPDATE mounts SET last_mount_at=NOW(), last_error=NULL WHERE id=:id"
+                        ), {"id": r["id"]})
+                        logger.info(f"✓ Montage restauré automatiquement : {local_path}")
+                        from watcher.scanner import scan_queue
+                        scan_queue.enqueue_priority(r["id"])
+                    else:
+                        self._state[local_path] = False
+                        conn.execute(text(
+                            "UPDATE mounts SET last_error=:e WHERE id=:id"
+                        ), {"e": err, "id": r["id"]})
+                        if was_ok is not False:
+                            logger.error(f"✗ Remontage automatique échoué {local_path} : {err}")
+                conn.commit()
+        except Exception as e:
+            logger.error(f"MountWatchdog._check : {e}")
+
+
+mount_watchdog = MountWatchdog()
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────

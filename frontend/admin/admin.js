@@ -11,8 +11,8 @@ let logTimer   = null;
 let dashTimer  = null;
 let versionTimer = null;
 
-function switchTab(name) {
-  if (name === activeTab) return;
+function switchTab(name, opts) {
+  if (name === activeTab && !opts) return;
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-item[data-tab]').forEach(b => b.classList.remove('active'));
   document.getElementById('panel-' + name).classList.add('active');
@@ -25,6 +25,16 @@ function switchTab(name) {
   else if (name === 'logs')  startLogs();
   else if (name === 'config') Config.load();
   else if (name === 'perf')  Perf.load();
+  else if (name === 'users')   Users.load();
+  else if (name === 'library') {
+    if (opts && opts.status) Library.loadWithStatus(opts.status);
+    else Library.load();
+  }
+}
+
+// Depuis le Dashboard : ouvre la Bibliothèque filtrée sur un statut disque (missing/duplicate)
+function goToLibraryStatus(status) {
+  switchTab('library', { status });
 }
 
 /* ── Thème ────────────────────────────────────────────────────────────────── */
@@ -62,6 +72,18 @@ async function loadDashboard() {
     showDashMsg('error', e.message);
   }
   dashTimer = setTimeout(loadDashboard, 5000);
+}
+
+// Retourne un badge coloré selon des seuils.
+// thresholds = [{v, c}] ordonnés du meilleur au pire.
+// lowerIsBetter : compare val < t.v (sinon val >= t.v).
+function _pgStat(val, suffix, thresholds, lowerIsBetter = false) {
+  if (val == null) return '<span class="card-value text-muted">—</span>';
+  let cls = thresholds[thresholds.length - 1].c;
+  for (const t of thresholds.slice(0, -1)) {
+    if (lowerIsBetter ? val < t.v : val >= t.v) { cls = t.c; break; }
+  }
+  return `<span class="badge ${cls}">${val}${suffix}</span>`;
 }
 
 function renderDashCards(d) {
@@ -107,155 +129,83 @@ function renderDashCards(d) {
  
     <!-- PostgreSQL -->
     <div class="card">
-      <div class="card-header"><i class="bi bi-database"></i> PostgreSQL</div>
+      <div class="card-header"><i class="bi bi-database"></i> ${db.type ?? 'PostgreSQL'}</div>
       <div class="card-row"><span class="card-label">Statut</span>
         <span class="badge ${isConn ? 'badge-success' : 'badge-danger'}">
           <span class="dot"></span>${isConn ? 'Connected' : 'Disconnected'}
         </span></div>
-      <div class="card-row"><span class="card-label">Type</span>
-        <span class="card-value">${db.type ?? 'PostgreSQL'}</span></div>
       <div class="card-row"><span class="card-label">Base</span>
         <span class="card-value text-blue">${db.database ?? '—'}</span></div>
+      <div class="card-row"><span class="card-label">Taille</span>
+        <span class="card-value">${db.size ?? '—'}</span></div>
+      <div class="card-row"><span class="card-label">Connexions</span>
+        <span class="card-value">${db.connections ?? '—'}</span></div>
+      <div class="card-row"><span class="card-label">Cache hit</span>
+        ${_pgStat(db.cache_hit, '%', [{v:95,c:'badge-success'},{v:80,c:'badge-warn'},{v:0,c:'badge-danger'}])}</div>
+      <div class="card-row"><span class="card-label">Deadlocks</span>
+        ${_pgStat(db.deadlocks, '', [{v:1,c:'badge-success'},{v:0,c:'badge-danger'}], true)}</div>
+      <div class="card-row"><span class="card-label">Bloat</span>
+        ${_pgStat(db.bloat_pct, '%', [{v:5,c:'badge-success'},{v:10,c:'badge-warn'},{v:Infinity,c:'badge-danger'}], true)}</div>
     </div>
   `;
 }
 
 async function updateDashStats(d) {
-  const m = d.services?.mounts ?? {};
-  const total   = m.total   ?? 0;
-  const healthy = m.healthy ?? 0;
-  const failed  = m.failed  ?? 0;
-
-  setText('stat-mounts-up',    healthy);
-  setText('stat-mounts-down',  failed);
-  setText('stat-mounts-total', total);
-  setText('stat-mounts-up2',   healthy);
-  setText('stat-mounts-down2', failed);
-  setText('stat-mounts-label', `${total} montage${total > 1 ? 's' : ''} configuré${total > 1 ? 's' : ''}`);
-  const mPct = total > 0 ? Math.round(healthy / total * 100) : 0;
-  const mBar = document.getElementById('stat-mounts-bar');
-  if (mBar) mBar.style.width = mPct + '%';
-
-   // ── Fichiers — appel API dédié ──────────────────────────────────────────
+  // ── Fichiers — appel API dédié ──────────────────────────────────────────
   try {
     const r = await fetch(`${API}/api/admin/files/stats`);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const f = await r.json();
-    
-    const fanalyzed  = f.analyzed   ?? 0;
-    const fdiscovered= f.discovered ?? 0;
-    const fanalyzing = f.analyzing  ?? 0;
-    const ftotal     = f.total      ?? 0;
 
-    // Barre de navigation (header)
-    setText('stat-files-ok',    fanalyzed);
-    setText('stat-files-wait',  fdiscovered + fanalyzing);
-    setText('stat-files-total', ftotal);
+    const fanalyzed   = f.analyzed   ?? 0;
+    const fdiscovered = f.discovered ?? 0;
+    const fanalyzing  = f.analyzing  ?? 0;
+    const ferror      = f.error      ?? 0;
+    const ftotal      = f.total      ?? 0;
+    const fpending    = fdiscovered + fanalyzing;
 
-    // Panneau détail
     const pct = ftotal > 0 ? Math.round(fanalyzed / ftotal * 100) : 0;
-    setText('stat-files-pct',   ftotal > 0 ? `${pct}% ANALYSÉ` : '—');
-    setText('stat-files-label', `${ftotal} Fichier${ftotal > 1 ? 's' : ''} indexé${ftotal > 1 ? 's' : ''}`);
-    setText('stat-files-ok2',   fanalyzed);
-    setText('stat-files-wait2', fdiscovered + fanalyzing);
-    const bar = document.getElementById('stat-files-bar');
-    if (bar) bar.style.width = (ftotal > 0 ? pct : 0) + '%';
+    setText('lib-label',    `${ftotal.toLocaleString('fr-FR')} fichier${ftotal > 1 ? 's' : ''} indexé${ftotal > 1 ? 's' : ''}`);
+    setText('lib-pct',      ftotal > 0 ? `${pct}%` : '—');
+    setText('lib-analyzed', fanalyzed.toLocaleString('fr-FR'));
+    setText('lib-pending',  fpending.toLocaleString('fr-FR'));
+    setText('lib-error',    ferror.toLocaleString('fr-FR'));
 
-    // Catégories dans le header
-    const cats = f.by_category ?? [];
-    const catsWithFiles = cats.filter(c => c.count > 0);
-    const catEl = document.getElementById('stat-categories-list');
-    if (catEl) {
-      if (catsWithFiles.length === 0) {
-        catEl.innerHTML = '<span class="text-muted">—</span>';
-      } else {
-        catEl.innerHTML = catsWithFiles
-          .map(c => `<span class="text-purple">
-            ${esc(c.name.charAt(0).toUpperCase() + c.name.slice(1))} (${c.count})
-          </span>`)
-          .join('<span class="slash"> / </span>');
-      }
+    const bar  = document.getElementById('lib-bar');
+    if (bar) {
+      bar.style.width = (ftotal > 0 ? pct : 0) + '%';
+      bar.style.background = pct === 100 ? 'var(--green)' : fpending > 0 ? 'var(--blue)' : 'var(--green)';
     }
 
+    const catCounts = {};
+    for (const c of (f.by_category ?? [])) catCounts[c.name] = c.count;
+    if (typeof Mounts !== 'undefined') Mounts.updateCategoryCounts(catCounts);
   } catch (e) {
     console.warn('files/stats:', e.message);
   }
 
-// ── Bibliothèque ──────────────────────────────────────────────────────────
-      const lib = d.library ?? {};
-      const tb  = lib.total_tb ?? 0;
-      setText('stat-files-size',
-        tb >= 1 ? `${tb} To` : `${Math.round(tb * 1024)} Go`);
-      setText('stat-files-missing',   lib.missing_files   ?? 0);
-      setText('stat-files-duplicate', lib.duplicate_files ?? 0);
+  // ── Bibliothèque — taille + manquants/doublons (depuis dashboard) ─────────
+  const lib = d.library ?? {};
+  const tb  = lib.total_tb ?? 0;
+  setText('lib-size', tb >= 1 ? `${tb} To` : `${Math.round(tb * 1024)} Go`);
 
-      // Nb titres
-      setText('stat-lib-titles', lib.nb_titles ?? '—');
+  const trashBytes = lib.trash_bytes ?? 0;
+  const trashBadge = document.getElementById('lib-trash-badge');
+  if (trashBadge) {
+    trashBadge.classList.toggle('lib-alert-hidden', trashBytes <= 0);
+    setText('lib-trash-size', fmtBytes(trashBytes));
+  }
 
-      // Durée totale
-      const h      = lib.total_hours ?? 0;
-      const years  = Math.floor(h / 8760);
-      const months = Math.floor((h % 8760) / 730);
-      let hl = '';
-      if (years  > 0) hl += `${years} an${years  > 1 ? 's' : ''} `;
-      if (months > 0) hl += `${months} mois`;
-      if (!hl)        hl  = `${Math.round(h).toLocaleString('fr-FR')} h`;
-      setText('stat-lib-hours', hl.trim());
+  const missing   = lib.missing_files   ?? 0;
+  const duplicate = lib.duplicate_files ?? 0;
+  setText('lib-missing',   missing.toLocaleString('fr-FR'));
+  setText('lib-duplicate', duplicate.toLocaleString('fr-FR'));
+  const missBlock = document.getElementById('lib-missing-block');
+  const dupBlock  = document.getElementById('lib-duplicate-block');
+  if (missBlock) missBlock.classList.toggle('lib-alert-hidden', missing === 0);
+  if (dupBlock)  dupBlock.classList.toggle('lib-alert-hidden',  duplicate === 0);
 
-      // BDD
-      setText('stat-db-size',    d.services?.database?.size ?? '—');
-      setText('stat-db-missing', lib.missing_files ?? 0);
-
-// ── Jobs ──────────────────────────────────────────────────────────────────
-  try {
-    const rj = await fetch(`${API}/api/admin/jobs/status`);
-    const j  = await rj.json();
-
-    const lines = [];
-
-    // Scanner
-    const sc = j.scanner ?? {};
-    if (sc.last_status === 'running') {
-      lines.push(`<span class="text-blue">⟳ Scanner actif</span>`);
-    } else if (sc.last_finished) {
-      lines.push(`✓ Scanner — ${sc.files_new ?? 0} nouveaux`);
-    }
-
-    // Analyser
-    const an = j.analyzer ?? {};
-    if (an.running) {
-      const pct = an.current_total > 0
-        ? Math.round(an.current_done / an.current_total * 100) : 0;
-      lines.push(`<span class="text-blue">⟳ Analyser ${pct}% — ${an.current_folder?.split('/').pop() ?? ''}</span>`);
-    } else if (an.sessions_pending > 0) {
-      lines.push(`⏳ Analyser — ${an.sessions_pending} session(s) en attente`);
-    } else {
-      lines.push(`✓ Analyser — ${an.sessions_done} sessions terminées`);
-    }
-
-    // Catalogueur
-    const ca = j.cataloger ?? {};
-    if (ca.titles_pending > 0) {
-      lines.push(`⟳ Catalogueur en cours…`);
-    } else {
-      lines.push(`✓ Catalogue — ${(ca.titles_ok ?? 0).toLocaleString('fr-FR')} titres · ${(ca.proposals_pending ?? 0).toLocaleString('fr-FR')} propositions`);
-    }
-
-    const detail = document.getElementById('jobs-detail');
-    if (detail) detail.innerHTML = lines.join('<br>');
-
-    const ind = document.getElementById('jobs-indicator');
-    const hasActive = (j.analyzer?.running || j.cataloger?.titles_pending > 0);
-    if (ind) {
-      ind.textContent = hasActive ? '● actif' : '● ok';
-      ind.classList.remove('text-blue', 'text-success');
-      ind.classList.add(hasActive ? 'text-blue' : 'text-success');
-    }
-
-  } catch(e) {
-    console.warn('jobs/status:', e.message);
-  }      
-
+  loadPipeline();
 }
 
 async function svcAction(svc, action) {
@@ -273,17 +223,10 @@ async function svcAction(svc, action) {
 function showDashMsg(type, msg) {
   const el = document.getElementById('dash-msg');
   const cls = type === 'ok' ? 'badge-success' : 'badge-danger';
-  el.innerHTML = `<span class="badge ${cls} mt-8">${esc(msg)}</span>`;
+  el.innerHTML = `<span class="badge ${cls} mt-8">${escHtml(msg)}</span>`;
   setTimeout(() => { el.innerHTML = ''; }, 5000);
 }
 
-/* ── Stats panel toggle ───────────────────────────────────────────────────── */
-function toggleStats() {
-  const drawer  = document.getElementById('stats-drawer');
-  const chevron = document.getElementById('stats-chevron');
-  drawer.classList.toggle('open');
-  chevron.classList.toggle('open');
-}
 
 /* ── Système header ───────────────────────────────────────────────────────── */
 async function refreshHeader() {
@@ -416,39 +359,155 @@ async function startUpdate() {
   }
 }
 
-/* ── Logs ─────────────────────────────────────────────────────────────────── */
-function startLogs() { loadLogs(); }
+/* ── Services & Logs ──────────────────────────────────────────────────────── */
+let _logConfigLoaded = false;
+let _servicesInterval = 15;
+
+function startLogs() {
+  if (!_logConfigLoaded) {
+    _initLogsConfig().then(() => loadLogs());
+  } else {
+    loadLogs();
+  }
+}
+
+async function _initLogsConfig() {
+  try {
+    const r = await fetch(`${API}/api/admin/config`);
+    const d = await r.json();
+    const entry = (d ?? []).find(c => c.key === 'services_refresh_interval');
+    _servicesInterval = entry ? Math.max(5, parseInt(entry.value, 10)) : 15;
+    setText('log-refresh-label', `Auto-refresh ${_servicesInterval}s`);
+  } catch {}
+  _logConfigLoaded = true;
+}
+
+async function loadPipeline() {
+  if (activeTab !== 'dashboard') return;
+  try {
+    const r = await fetch(`${API}/api/admin/jobs/status`);
+    const d = await r.json();
+    _renderPipeline(d);
+  } catch (e) {
+    const el = document.getElementById('pipeline-list');
+    if (el) el.innerHTML =
+      `<div class="service-row"><span class="text-muted">Erreur : ${escHtml(e.message)}</span></div>`;
+  }
+}
+
+function _renderPipeline(jobs) {
+  const sc = jobs.scanner   ?? {};
+  const az = jobs.analyzer  ?? {};
+  const ct = jobs.cataloger ?? {};
+
+  function badge(cls, label) {
+    return `<span class="badge badge-${cls}"><span class="dot"></span>${label}</span>`;
+  }
+
+  const scanBadge = sc.last_status === 'running' ? badge('info', 'En cours')
+                  : sc.last_status === 'done'    ? badge('success', 'Idle')
+                  : sc.last_status === 'error'   ? badge('danger', 'Erreur')
+                  : badge('muted', '—');
+  const scanDetail = [
+    sc.last_mount    ? `/${sc.last_mount}` : '',
+    sc.files_found != null ? `${sc.files_found} fichiers` : '',
+    sc.files_new    ? `+${sc.files_new} nouveaux` : '',
+    sc.last_finished ? sc.last_finished.slice(11, 16) : '',
+  ].filter(Boolean).join(' · ');
+
+  const azBadge = az.running
+    ? badge('info', `En cours ${az.current_done}/${az.current_total}`)
+    : badge('success', 'Idle');
+  const azDetail = az.running
+    ? escHtml(az.current_folder ?? '')
+    : [
+        az.sessions_done != null ? `${az.sessions_done} sessions` : '',
+        az.sessions_pending      ? `${az.sessions_pending} en attente` : '',
+        az.last_finished         ? az.last_finished.slice(11, 16) : '',
+      ].filter(Boolean).join(' · ');
+
+  const ctDetail = [
+    ct.titles_ok != null   ? `${ct.titles_ok} OK` : '',
+    ct.titles_to_rename    ? `${ct.titles_to_rename} à renommer` : '',
+    ct.proposals_pending   ? `${ct.proposals_pending} propositions` : '',
+  ].filter(Boolean).join(' · ') || '—';
+
+  const el = document.getElementById('pipeline-list');
+  if (!el) return;
+  el.innerHTML = `
+    <div class="service-row">
+      <span class="service-icon"><i class="bi bi-search"></i></span>
+      <span class="service-name">Scanner</span>
+      <span class="service-badge">${scanBadge}</span>
+      <span class="service-detail">${scanDetail || '—'}</span>
+    </div>
+    <div class="service-row">
+      <span class="service-icon"><i class="bi bi-cpu"></i></span>
+      <span class="service-name">Analyzer</span>
+      <span class="service-badge">${azBadge}</span>
+      <span class="service-detail">${azDetail || '—'}</span>
+    </div>
+    <div class="service-row">
+      <span class="service-icon"><i class="bi bi-journals"></i></span>
+      <span class="service-name">Cataloger</span>
+      <span class="service-badge">${badge('success', 'Idle')}</span>
+      <span class="service-detail">${ctDetail}</span>
+    </div>`;
+}
 
 async function loadLogs() {
   if (activeTab !== 'logs') return;
-  const lines = document.getElementById('log-lines')?.value ?? 50;
+  const lines  = document.getElementById('log-lines')?.value  ?? 100;
+  const level  = document.getElementById('log-level')?.value  ?? '';
+  const module = document.getElementById('log-module')?.value ?? '';
   try {
-    const r = await fetch(`${API}/api/admin/logs?lines=${lines}`);
+    const params = new URLSearchParams({ lines });
+    if (level)  params.set('level',  level);
+    if (module) params.set('module', module);
+    const r = await fetch(`${API}/api/admin/logs?${params}`);
     const d = await r.json();
+
+    if (d.modules?.length) _updateModuleSelect(d.modules, module);
+
     const box = document.getElementById('log-box');
+    const atBottom = box.scrollHeight - box.scrollTop <= box.clientHeight + 8;
+    const savedScroll = box.scrollTop;
     if (d.logs?.length) {
-      box.innerHTML = d.logs
-        .filter(l => l.trim())
-        .map(l => `<div class="log-line ${classifyLog(l)}">${esc(l)}</div>`)
-        .join('');
-      box.scrollTop = box.scrollHeight;
+      box.innerHTML = d.logs.map(e => {
+        const cls = _levelClass(e.level);
+        return `<div class="log-line ${cls}">` +
+          `<span class="log-ts">${escHtml(e.ts)}</span>` +
+          `<span class="log-lvl">${escHtml(e.level)}</span>` +
+          `<span class="log-mod">${escHtml(e.module)}</span>` +
+          `<span class="log-msg">${escHtml(e.message)}</span>` +
+          `</div>`;
+      }).join('');
+      box.scrollTop = atBottom ? box.scrollHeight : savedScroll;
     } else {
-      box.innerHTML = '<div class="log-line">Aucun log disponible</div>';
+      box.innerHTML = '<div class="log-line log-full">Aucun log disponible</div>';
     }
   } catch (e) {
     document.getElementById('log-box').innerHTML =
-      `<div class="log-line error">Erreur : ${esc(e.message)}</div>`;
+      `<div class="log-line log-full error">Erreur : ${escHtml(e.message)}</div>`;
   }
-  logTimer = setTimeout(loadLogs, 5000);
+  logTimer = setTimeout(startLogs, _servicesInterval * 1000);
 }
 
-function classifyLog(line) {
-  const l = line.toLowerCase();
-  if (l.includes('error') || l.includes('erreur') || l.includes('exception')) return 'error';
-  if (l.includes('warn'))  return 'warn';
-  if (l.includes('info'))  return 'info';
-  if (l.includes('ok') || l.includes('success') || l.includes('réussi')) return 'ok';
+function _levelClass(level) {
+  if (level === 'ERROR' || level === 'CRITICAL') return 'error';
+  if (level === 'WARNING') return 'warn';
+  if (level === 'INFO')    return 'info';
   return '';
+}
+
+function _updateModuleSelect(modules, current) {
+  const sel = document.getElementById('log-module');
+  if (!sel) return;
+  const opts = ['<option value="">Tous</option>'];
+  for (const m of modules) {
+    opts.push(`<option value="${escHtml(m)}"${m === current ? ' selected' : ''}>${escHtml(m)}</option>`);
+  }
+  sel.innerHTML = opts.join('');
 }
 
 /* ── API tab ──────────────────────────────────────────────────────────────── */
@@ -460,16 +519,8 @@ async function testAPIConn() {
     const d = await r.json();
     el.innerHTML = `<span class="badge badge-success"><span class="dot"></span>${d.status ?? 'ok'}</span>`;
   } catch (e) {
-    el.innerHTML = `<span class="badge badge-danger"><span class="dot"></span>${esc(e.message)}</span>`;
+    el.innerHTML = `<span class="badge badge-danger"><span class="dot"></span>${escHtml(e.message)}</span>`;
   }
-}
-
-/* ── Utilitaires ──────────────────────────────────────────────────────────── */
-function setText(id, v) { const el = document.getElementById(id); if (el) el.textContent = v; }
-function esc(s) {
-  return String(s ?? '')
-    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
-    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 /* ── Purge (dev) ──────────────────────────────────────────────────────────── */
@@ -492,21 +543,153 @@ async function executePurge() {
     const r = await fetch(`${API}/api/admin/purge`, { method: 'DELETE' });
     const d = await r.json();
     if (d.success) {
-      res.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> ' + esc(d.message) + '</span>';
+      res.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> ' + escHtml(d.message) + '</span>';
       setTimeout(() => {
         closePurge();
         loadDashboard();
       }, 1500);
     } else {
-      res.innerHTML = '<span class="text-danger">Erreur : ' + esc(JSON.stringify(d)) + '</span>';
+      res.innerHTML = '<span class="text-danger">Erreur : ' + escHtml(JSON.stringify(d)) + '</span>';
     }
   } catch (e) {
-    res.innerHTML = '<span class="text-danger"><i class="bi bi-x-circle"></i> ' + esc(e.message) + '</span>';
+    res.innerHTML = '<span class="text-danger"><i class="bi bi-x-circle"></i> ' + escHtml(e.message) + '</span>';
   } finally {
     btn.disabled = false;
     btn.innerHTML = '<i class="bi bi-trash3"></i> Confirmer la purge';
   }
 }
+
+/* ── Auth ─────────────────────────────────────────────────────────────────── */
+async function authInit() {
+  try {
+    const r = await fetch(`${API}/api/auth/me`);
+    if (r.status === 401) { location.href = '/login'; return; }
+    const d = await r.json();
+    setText('nav-username', d.username ?? '—');
+    const roleEl = document.getElementById('nav-role');
+    if (roleEl) {
+      roleEl.textContent = d.role === 'admin' ? 'Admin' : 'Viewer';
+      roleEl.className = 'nav-role ' + (d.role === 'admin' ? 'role-admin' : 'role-viewer');
+    }
+  } catch { /* ignore réseau */ }
+}
+
+async function authLogout() {
+  await fetch(`${API}/api/auth/logout`, { method: 'POST' });
+  location.href = '/login';
+}
+
+/* ── Utilisateurs ─────────────────────────────────────────────────────────── */
+const Users = (() => {
+  let _editingUid = null;
+  let _editingName = '';
+
+  async function load() {
+    try {
+      const r = await fetch(`${API}/api/admin/users`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = await r.json();
+      _render(d.users ?? []);
+    } catch (e) {
+      document.getElementById('users-tbody').innerHTML =
+        `<tr><td colspan="4" class="text-danger">${escHtml(e.message)}</td></tr>`;
+    }
+  }
+
+  function _render(users) {
+    const tbody = document.getElementById('users-tbody');
+    if (!users.length) {
+      tbody.innerHTML = '<tr><td colspan="4"><div class="empty-state">Aucun utilisateur</div></td></tr>';
+      return;
+    }
+    tbody.innerHTML = users.map(u => `
+      <tr>
+        <td><strong>${escHtml(u.username)}</strong></td>
+        <td><span class="badge ${u.role === 'admin' ? 'badge-info' : 'badge-muted'}">${escHtml(u.role)}</span></td>
+        <td class="text-muted">${escHtml(u.created_at)}</td>
+        <td class="td-actions">
+          <button class="btn btn-sm" onclick="Users.openPwd(${u.id},'${escHtml(u.username)}')" title="Changer le mot de passe">
+            <i class="bi bi-key"></i>
+          </button>
+          <button class="btn btn-sm btn-danger" onclick="Users.del(${u.id},'${escHtml(u.username)}')" title="Supprimer">
+            <i class="bi bi-trash3"></i>
+          </button>
+        </td>
+      </tr>`).join('');
+  }
+
+  function openAdd() {
+    document.getElementById('add-username').value = '';
+    document.getElementById('add-password').value = '';
+    document.getElementById('add-role').value = 'viewer';
+    document.getElementById('add-user-error').textContent = '';
+    document.getElementById('overlay-user-add').classList.add('active');
+  }
+  function closeAdd() {
+    document.getElementById('overlay-user-add').classList.remove('active');
+  }
+
+  async function submitAdd() {
+    const username = document.getElementById('add-username').value.trim();
+    const password = document.getElementById('add-password').value;
+    const role     = document.getElementById('add-role').value;
+    const errEl    = document.getElementById('add-user-error');
+    errEl.textContent = '';
+    if (!username || !password) { errEl.textContent = 'Champs requis manquants.'; return; }
+    try {
+      const r = await fetch(`${API}/api/admin/users`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password, role })
+      });
+      const d = await r.json();
+      if (!r.ok) { errEl.textContent = d.detail || 'Erreur'; return; }
+      closeAdd();
+      load();
+    } catch (e) { errEl.textContent = e.message; }
+  }
+
+  function openPwd(uid, username) {
+    _editingUid  = uid;
+    _editingName = username;
+    document.getElementById('pwd-username').textContent = username;
+    document.getElementById('pwd-new').value = '';
+    document.getElementById('pwd-error').textContent = '';
+    document.getElementById('overlay-user-pwd').classList.add('active');
+  }
+  function closePwd() {
+    document.getElementById('overlay-user-pwd').classList.remove('active');
+  }
+
+  async function submitPwd() {
+    const password = document.getElementById('pwd-new').value;
+    const errEl    = document.getElementById('pwd-error');
+    errEl.textContent = '';
+    if (!password) { errEl.textContent = 'Mot de passe requis.'; return; }
+    try {
+      const r = await fetch(`${API}/api/admin/users/${_editingUid}/password`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password })
+      });
+      const d = await r.json();
+      if (!r.ok) { errEl.textContent = d.detail || 'Erreur'; return; }
+      closePwd();
+    } catch (e) { errEl.textContent = e.message; }
+  }
+
+  async function del(uid, username) {
+    if (!confirm(`Supprimer l'utilisateur « ${username} » ?`)) return;
+    try {
+      const r = await fetch(`${API}/api/admin/users/${uid}`, { method: 'DELETE' });
+      const d = await r.json();
+      if (!r.ok) { alert(d.detail || 'Erreur'); return; }
+      load();
+    } catch (e) { alert(e.message); }
+  }
+
+  return { load, openAdd, closeAdd, submitAdd, openPwd, closePwd, submitPwd, del };
+})();
 
 /* ── Init ─────────────────────────────────────────────────────────────────── */
 window.addEventListener('load', () => {
@@ -515,9 +698,10 @@ window.addEventListener('load', () => {
   setTheme(savedTheme);
   // Base URL
   setText('base-url', API);
+  // Auth : vérifie session et affiche l'utilisateur
+  authInit();
   // Démarrer
   startDashboard();
   // Init mounts
   if (typeof Mounts !== 'undefined') Mounts.init();
-
 });

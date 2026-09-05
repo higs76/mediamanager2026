@@ -20,26 +20,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _get_lang_names(conn) -> dict:
-    """Charge les noms de langues depuis la BDD (table language_names).
-
-    Utilise un savepoint : si la table n'existe pas encore, seul le savepoint est annulé,
-    la transaction parente reste valide et les requêtes suivantes peuvent continuer.
-    """
-    try:
-        with conn.begin_nested():
-            rows = conn.execute(text(
-                "SELECT code, label FROM language_names"
-            )).mappings().fetchall()
-        return {r["code"]: r["label"] for r in rows}
-    except Exception:
-        return {}
-
-
-def _resolve_lang(code: str, lang_map: dict) -> str:
-    """Résout un code ISO 639 en libellé lisible via le dictionnaire de la BDD."""
-    normalized = code.strip().lower()
-    return lang_map.get(normalized, code.strip().upper() or "Inconnue")
 
 
 @router.get("/files/stats")
@@ -57,6 +37,7 @@ def files_stats():
             analyzed   = sum(r[2] for r in status_rows if r[0] == 'analyzed')
             discovered = sum(r[2] for r in status_rows if r[0] == 'discovered')
             analyzing  = sum(r[2] for r in status_rows if r[0] == 'analyzing')
+            error      = sum(r[2] for r in status_rows if r[0] == 'error')
             missing    = sum(r[2] for r in status_rows if r[1] == 'missing')
             duplicate  = sum(r[2] for r in status_rows if r[1] == 'duplicate')
 
@@ -85,6 +66,7 @@ def files_stats():
             "analyzed":   analyzed,
             "discovered": discovered,
             "analyzing":  analyzing,
+            "error":      error,
             "missing":    missing,
             "duplicate":  duplicate,
             "by_category": [{"name": r["name"], "count": r["cnt"]} for r in cat_rows],
@@ -112,34 +94,40 @@ def files_quality_stats(cat_id: int = None):
     """
     try:
         with engine.connect() as conn:
-            lang_map = _get_lang_names(conn)
-
-            # vm_join : inclut le JOIN media_files uniquement quand on filtre par catégorie.
-            # Sans filtre, scan direct sur video_metadata (pas de JOIN inutile).
-            vm_join = (
-                "JOIN media_files mf ON mf.id = vm.file_id"
-                " JOIN mounts mcat ON mcat.id = mf.mount_id AND mcat.category_id = :cat_id"
-            ) if cat_id else ""
-            # mounts_join : pour totals qui a toujours JOIN media_files mais filtre mounts optionnel.
-            mounts_join = "JOIN mounts mcat ON mcat.id = mf.mount_id AND mcat.category_id = :cat_id" if cat_id else ""
-            semi_filter = (
-                "EXISTS (SELECT 1 FROM media_files mf2"
-                " JOIN mounts mcat2 ON mcat2.id = mf2.mount_id"
-                " WHERE mf2.id = video_metadata.file_id AND mcat2.category_id = :cat_id)"
-            ) if cat_id else "1=1"
-            path_filter = (
-                "EXISTS (SELECT 1 FROM mounts mcat3"
-                " WHERE mcat3.id = mf.mount_id AND mcat3.category_id = :cat_id)"
-            ) if cat_id else "1=1"
             params = {"cat_id": cat_id} if cat_id else {}
+
+            # Joins de filtrage par catégorie — construits selon le contexte de chaque requête
+            # Pour video_metadata : media_files est joint conditionnellement
+            vm_cat  = (
+                "JOIN media_files mf ON mf.id = vm.file_id "
+                "JOIN mounts mcat ON mcat.id = mf.mount_id AND mcat.category_id = :cat_id"
+            ) if cat_id else ""
+            # Pour totals : media_files toujours joint (SUM sur mf.size_bytes), mounts conditionnel
+            tot_cat = "JOIN mounts mcat ON mcat.id = mf.mount_id AND mcat.category_id = :cat_id" if cat_id else ""
+
+            def _trk_join(alias: str) -> str:
+                """Join media_files+mounts pour filtrer par catégorie, omis entièrement sans filtre
+                (évite un hash join de ~40k lignes inutile sur la vue 'toutes catégories')."""
+                if not cat_id:
+                    return ""
+                return (
+                    f"JOIN media_files mf ON mf.id = {alias}.file_id "
+                    "JOIN mounts mcat ON mcat.id = mf.mount_id AND mcat.category_id = :cat_id"
+                )
+            # Pour les titres (basé sur media_files)
+            path_filter = (
+                "EXISTS (SELECT 1 FROM mounts mcat3 "
+                "WHERE mcat3.id = mf.mount_id AND mcat3.category_id = :cat_id)"
+            ) if cat_id else "1=1"
 
             _t = _time.perf_counter()
             codecs = conn.execute(text(f"""
-                SELECT video_codec, COUNT(*) as cnt
+                SELECT c.name as video_codec, COUNT(*) as cnt
                 FROM video_metadata vm
-                {vm_join}
-                WHERE video_codec IS NOT NULL
-                GROUP BY video_codec ORDER BY cnt DESC
+                JOIN codecs c ON c.id = vm.video_codec_id
+                {vm_cat}
+                WHERE vm.video_codec_id IS NOT NULL
+                GROUP BY c.name ORDER BY cnt DESC
             """), params).mappings().fetchall()
             _perf("quality_stats", "codecs", (_time.perf_counter() - _t) * 1000, len(codecs))
 
@@ -154,7 +142,7 @@ def files_quality_stats(cat_id: int = None):
                     END as label,
                     COUNT(*) as cnt
                 FROM video_metadata vm
-                {vm_join}
+                {vm_cat}
                 WHERE video_height IS NOT NULL
                 GROUP BY label ORDER BY cnt DESC
             """), params).mappings().fetchall()
@@ -162,36 +150,68 @@ def files_quality_stats(cat_id: int = None):
 
             _t = _time.perf_counter()
             hdr = conn.execute(text(f"""
-                SELECT hdr_format, COUNT(*) as cnt
-                FROM video_metadata vm
-                {vm_join}
-                WHERE hdr_format IS NOT NULL
-                GROUP BY hdr_format ORDER BY cnt DESC
+                SELECT hf.name as hdr_format, COUNT(DISTINCT fhf.file_id) as cnt
+                FROM file_hdr_formats fhf
+                JOIN hdr_formats hf ON hf.id = fhf.hdr_format_id
+                {_trk_join('fhf')}
+                GROUP BY hf.name ORDER BY cnt DESC
             """), params).mappings().fetchall()
             _perf("quality_stats", "hdr", (_time.perf_counter() - _t) * 1000, len(hdr))
 
             _t = _time.perf_counter()
-            audio_rows = conn.execute(text(f"""
-                SELECT audio_codecs, audio_languages, audio_channel_layouts
-                FROM video_metadata
-                WHERE {semi_filter}
-                  AND (audio_codecs IS NOT NULL OR audio_languages IS NOT NULL
-                       OR audio_channel_layouts IS NOT NULL)
-            """), params).fetchall()
-            _perf("quality_stats", "audio", (_time.perf_counter() - _t) * 1000, len(audio_rows))
+            audio_codecs_rows = conn.execute(text(f"""
+                SELECT c.name as codec_name, COUNT(*) as cnt
+                FROM audio_tracks at
+                JOIN codecs c ON c.id = at.codec_id
+                {_trk_join('at')}
+                GROUP BY c.name ORDER BY cnt DESC
+            """), params).mappings().fetchall()
+
+            audio_langs_rows = conn.execute(text(f"""
+                SELECT l.label as lang_label, COUNT(DISTINCT at.file_id) as cnt
+                FROM audio_tracks at
+                JOIN languages l ON l.id = at.language_id
+                {_trk_join('at')}
+                GROUP BY l.label ORDER BY cnt DESC
+            """), params).mappings().fetchall()
+
+            audio_chan_rows = conn.execute(text(f"""
+                SELECT
+                    CASE at.channels
+                        WHEN 1 THEN 'Mono'
+                        WHEN 2 THEN 'Stéréo'
+                        WHEN 6 THEN '5.1'
+                        WHEN 8 THEN '7.1'
+                        ELSE at.channels::text || ' ch'
+                    END as label,
+                    COUNT(*) as cnt
+                FROM audio_tracks at
+                {_trk_join('at')}
+                WHERE at.channels IS NOT NULL
+                GROUP BY at.channels ORDER BY cnt DESC
+            """), params).mappings().fetchall()
+            _perf("quality_stats", "audio", (_time.perf_counter() - _t) * 1000,
+                  len(audio_codecs_rows))
 
             _t = _time.perf_counter()
-            sub_rows = conn.execute(text(f"""
-                SELECT subtitle_languages FROM video_metadata
-                WHERE {semi_filter} AND subtitle_languages IS NOT NULL
-            """), params).fetchall()
-            _perf("quality_stats", "subtitles", (_time.perf_counter() - _t) * 1000, len(sub_rows))
+            sub_langs_rows = conn.execute(text(f"""
+                SELECT l.label as lang_label, COUNT(DISTINCT st.file_id) as cnt
+                FROM subtitle_tracks st
+                JOIN languages l ON l.id = st.language_id
+                {_trk_join('st')}
+                GROUP BY l.label ORDER BY cnt DESC
+            """), params).mappings().fetchall()
 
             no_sub = conn.execute(text(f"""
-                SELECT COUNT(*) FROM video_metadata
-                WHERE {semi_filter}
-                  AND (subtitle_languages IS NULL OR subtitle_languages = '')
+                SELECT COUNT(DISTINCT vm.file_id)
+                FROM video_metadata vm
+                {_trk_join('vm')}
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM subtitle_tracks st WHERE st.file_id = vm.file_id
+                )
             """), params).fetchone()[0]
+            _perf("quality_stats", "subtitles", (_time.perf_counter() - _t) * 1000,
+                  len(sub_langs_rows))
 
             _t = _time.perf_counter()
             titles_rows = conn.execute(text(f"""
@@ -214,7 +234,7 @@ def files_quality_stats(cat_id: int = None):
                     ROUND(SUM(mf.size_bytes)/1099511627776::numeric, 2) as total_tb
                 FROM video_metadata vm
                 JOIN media_files mf ON mf.id = vm.file_id
-                {mounts_join}
+                {tot_cat}
             """), params).mappings().fetchone()
             _perf("quality_stats", "totals", (_time.perf_counter() - _t) * 1000, 1)
 
@@ -230,49 +250,19 @@ def files_quality_stats(cat_id: int = None):
                 """)).mappings().fetchall()
                 by_category = [{"id": r["id"], "name": r["name"], "count": r["cnt"]} for r in cat_rows]
 
-        # Agrégation des champs semicolon-délimités en Python
-        audio_codec_counts: dict = {}
-        audio_lang_counts:  dict = {}
-        chan_counts:        dict = {}
-        for row in audio_rows:
-            for c in (row[0] or "").split(";"):
-                c = c.strip().upper()
-                if c:
-                    audio_codec_counts[c] = audio_codec_counts.get(c, 0) + 1
-            for lc in (row[1] or "").split(";"):
-                lc = lc.strip().lower()
-                if lc:
-                    name = _resolve_lang(lc, lang_map)
-                    audio_lang_counts[name] = audio_lang_counts.get(name, 0) + 1
-            for ch in (row[2] or "").split(";"):
-                ch = ch.strip()
-                if ch:
-                    chan_counts[ch] = chan_counts.get(ch, 0) + 1
-
-        sub_lang_counts: dict = {}
-        for row in sub_rows:
-            for lc in (row[0] or "").split(";"):
-                lc = lc.strip().lower()
-                if lc:
-                    name = _resolve_lang(lc, lang_map)
-                    sub_lang_counts[name] = sub_lang_counts.get(name, 0) + 1
-
-        def _sorted_list(d: dict) -> list:
-            return sorted([{"label": k, "count": v} for k, v in d.items()], key=lambda x: -x["count"])
-
         return JSONResponse({
             "cat_id":         cat_id,
             "total":          totals["total"] or 0,
             "total_seconds":  int(totals["total_seconds"] or 0),
             "avg_size_gb":    float(totals["avg_size_gb"] or 0),
             "total_tb":       float(totals["total_tb"] or 0),
-            "codecs":         [{"label": r["video_codec"], "count": r["cnt"]} for r in codecs],
-            "resolutions":    [{"label": r["label"],       "count": r["cnt"]} for r in resolutions],
-            "hdr":            [{"label": r["hdr_format"],  "count": r["cnt"]} for r in hdr],
-            "audio_codecs":   _sorted_list(audio_codec_counts),
-            "audio_langs":    _sorted_list(audio_lang_counts),
-            "audio_channels": _sorted_list(chan_counts),
-            "sub_langs":      _sorted_list(sub_lang_counts),
+            "codecs":         [{"label": r["video_codec"],  "count": r["cnt"]} for r in codecs],
+            "resolutions":    [{"label": r["label"],        "count": r["cnt"]} for r in resolutions],
+            "hdr":            [{"label": r["hdr_format"],   "count": r["cnt"]} for r in hdr],
+            "audio_codecs":   [{"label": r["codec_name"].upper(), "count": r["cnt"]} for r in audio_codecs_rows],
+            "audio_langs":    [{"label": r["lang_label"],   "count": r["cnt"]} for r in audio_langs_rows],
+            "audio_channels": [{"label": r["label"],        "count": r["cnt"]} for r in audio_chan_rows],
+            "sub_langs":      [{"label": r["lang_label"],   "count": r["cnt"]} for r in sub_langs_rows],
             "no_sub_count":   int(no_sub),
             "titles":         [{"name": r["title"], "count": r["cnt"], "size_gb": float(r["size_gb"] or 0)} for r in titles_rows],
             "nb_titles":      len(titles_rows),

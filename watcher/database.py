@@ -11,6 +11,9 @@ from watcher.config import DATABASE_URL
 
 logger = logging.getLogger(__name__)
 
+# État connu de la connexion — None = jamais testé
+_db_state: bool | None = None
+
 # Créer le moteur de BD
 # NullPool = pas de pool de connexions (utile pour dev/test)
 engine = create_engine(
@@ -43,14 +46,19 @@ def get_db_session() -> Session:
 
 def test_db_connection() -> bool:
     """
-    Teste si la connexion à la BD fonctionne
-    Retourne True si OK, False sinon
+    Teste si la connexion à la BD fonctionne.
+    Ne loggue que sur changement d'état (évite le spam en état stable).
     """
+    global _db_state
     try:
         with engine.connect() as conn:
-            result = conn.execute(text("SELECT 1"))
+            conn.execute(text("SELECT 1"))
+        if _db_state is not True:
             logger.info("✓ Connexion BD OK")
-            return True
+            _db_state = True
+        return True
     except Exception as e:
-        logger.error(f"✗ Erreur connexion BD : {e}")
+        if _db_state is not False:
+            logger.error(f"✗ Erreur connexion BD : {e}")
+            _db_state = False
         return False
