@@ -863,6 +863,10 @@ class CatalogQueue:
         self._event   = threading.Event()
         self._thread  = None
         self._running = False
+        # Pas de table d'historique pour le catalogueur (contrairement au scanner/
+        # analyzer) — suivi minimal en mémoire, suffisant pour un statut affiché.
+        self._is_processing: bool = False
+        self._last_run_at: str | None = None
 
     def start(self):
         self._running = True
@@ -880,6 +884,9 @@ class CatalogQueue:
         """Déclenche une passe de catalogage. Appelé après analyse ou manuellement."""
         self._event.set()
 
+    def get_status(self) -> dict:
+        return {"running": self._is_processing, "last_run": self._last_run_at}
+
     def _worker(self):
         time.sleep(8)  # Attendre que la BDD et l'analyze soient prêtes
         while self._running:
@@ -888,10 +895,14 @@ class CatalogQueue:
             self._event.clear()
             if not self._running:
                 break
+            self._is_processing = True
             try:
                 run_cataloger()
             except Exception as e:
                 logger.error(f"CatalogQueue: {e}")
+            finally:
+                self._is_processing = False
+                self._last_run_at = str(datetime.now())[:19]
 
 
 # Instance globale

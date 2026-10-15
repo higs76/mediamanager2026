@@ -235,10 +235,14 @@ async def lifespan(app: FastAPI):
         logger.warning(f"⚠ {len(result['errors'])} montage(s) inaccessible(s) au démarrage")
     mount_watchdog.start()
 
+    from watcher.mqtt_client import mqtt_queue
+    mqtt_queue.start()
+
     yield
 
     logger.info("Arrêt du service MediaManager Watcher")
     try:
+        mqtt_queue.stop()
         mount_watchdog.stop()
         scan_queue.stop()
         analyze_queue.stop()

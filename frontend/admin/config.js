@@ -23,6 +23,10 @@ const Config = (() => {
       keys: ['services_refresh_interval'] },
     { title: 'Logs', icon: 'bi-file-earmark-text',
       keys: ['log_retention_days'] },
+    { title: 'MQTT / Home Assistant', icon: 'bi-broadcast',
+      keys: ['mqtt_enabled', 'mqtt_host', 'mqtt_port', 'mqtt_username', 'mqtt_password',
+             'mqtt_topic_prefix', 'mqtt_publish_interval_seconds',
+             'mqtt_publish_library', 'mqtt_publish_jobs', 'mqtt_publish_mounts'] },
   ];
 
   // Séparateur explicite pour les champs "liste" — évite de deviner depuis
@@ -36,7 +40,27 @@ const Config = (() => {
 
   // Réglages dont un changement ne s'applique qu'au prochain redémarrage
   // du service (lus une seule fois au bootstrap, pas relus en boucle).
+  // (Les clés MQTT de connexion ont leur propre badge, affiché dans le panneau dédié.)
   const RESTART_REQUIRED = new Set(['log_retention_days']);
+
+  // Champs de connexion MQTT affichés dans le panneau dédié (hors toggles).
+  const MQTT_FIELDS = [
+    { key: 'mqtt_host', label: 'Hôte', type: 'text', desc: 'Adresse du broker MQTT (ex: 192.168.1.50)' },
+    { key: 'mqtt_port', label: 'Port', type: 'number', desc: 'Port du broker MQTT (1883 par défaut)' },
+    { key: 'mqtt_username', label: 'Utilisateur', type: 'text', desc: "Laisser vide si le broker n'exige pas d'authentification" },
+    { key: 'mqtt_password', label: 'Mot de passe', type: 'password', desc: 'Mot de passe MQTT' },
+    { key: 'mqtt_topic_prefix', label: 'Préfixe des topics', type: 'text', desc: 'Préfixe des topics publiés (ex: mediamanager)' },
+    { key: 'mqtt_publish_interval_seconds', label: 'Intervalle (s)', type: 'number', desc: "Fréquence de republication de l'état" },
+  ];
+
+  const MQTT_PUBLISH_TOGGLES = [
+    { key: 'mqtt_publish_library', label: 'Bibliothèque (titres, fichiers, taille, corbeille)' },
+    { key: 'mqtt_publish_jobs',    label: 'Jobs (scan, analyse, renommages en attente)' },
+    { key: 'mqtt_publish_mounts',  label: 'Montages NAS (montés / manquants)' },
+  ];
+
+  let _mqttDraft = null;
+  let _mqttItems = null;
 
   async function load() {
     try {
@@ -72,6 +96,9 @@ const Config = (() => {
   }
 
   function _sectionHtml(section, items) {
+    if (section.title === 'MQTT / Home Assistant') {
+      return _mqttPanelHtml(items);
+    }
     return `
       <div class="config-section">
         <div class="config-section-title"><i class="bi ${section.icon}"></i> ${escHtml(section.title)}</div>
@@ -79,6 +106,134 @@ const Config = (() => {
           ${items.map(_cardHtml).join('')}
         </div>
       </div>`;
+  }
+
+  /* ── Panneau MQTT dédié ───────────────────────────────────────────────────
+     Contrairement aux autres sections (une carte par clé, enregistrement
+     immédiat au blur), tout le bloc MQTT s'édite localement (_mqttDraft) et
+     ne se sauvegarde qu'au clic sur "Enregistrer" — cf. demande utilisateur. */
+  function _mqttPanelHtml(items) {
+    _mqttItems = items;
+    if (!_mqttDraft) {
+      _mqttDraft = Object.fromEntries(items.map(i => [i.key, i.value]));
+    }
+    const byKey  = Object.fromEntries(items.map(i => [i.key, i]));
+    const enabled = _mqttDraft['mqtt_enabled'] === 'true';
+
+    return `
+      <div class="config-section" id="mqtt-panel">
+        <div class="config-section-title"><i class="bi bi-broadcast"></i> MQTT / Home Assistant</div>
+        <div class="config-card config-card-wide">
+          <div class="config-desc" style="margin-bottom:12px">
+            Publie des indicateurs MediaManager (santé du service, bibliothèque, jobs,
+            montages NAS) vers un broker MQTT — par exemple pour les afficher dans
+            <strong>Home Assistant</strong> via MQTT Discovery : les capteurs apparaissent
+            automatiquement, sans aucune configuration manuelle côté HA.
+          </div>
+
+          <div class="toggle-row">
+            <span class="toggle-label">Activer MQTT</span>
+            <label class="toggle">
+              <input type="checkbox" ${enabled ? 'checked' : ''}
+                     onchange="Config.mqttDraftToggle('mqtt_enabled', this.checked)">
+              <span class="slider"></span>
+            </label>
+          </div>
+
+          ${enabled ? `
+            <div class="mt-10">
+              ${MQTT_FIELDS.map(f => _mqttFieldRow(f, byKey[f.key])).join('')}
+              <div class="config-restart-badge" style="margin-top:4px"
+                   title="Ces réglages ne sont lus qu'au démarrage du service">
+                redémarrage requis pour ces réglages
+              </div>
+
+              <div class="config-section-title" style="margin-top:18px; font-size:14px">Publications</div>
+              ${MQTT_PUBLISH_TOGGLES.map(t => _mqttToggleRow(t.key, t.label)).join('')}
+              <div class="config-desc">Pris en compte immédiatement, sans redémarrage.</div>
+            </div>
+          ` : ''}
+
+          <div class="flex-row mt-10">
+            <button class="btn btn-sm btn-primary" onclick="Config.saveMqttPanel()">
+              <i class="bi bi-check2"></i> Enregistrer les paramètres MQTT
+            </button>
+            <button class="btn btn-sm btn-secondary" onclick="Config.testMqtt()">
+              <i class="bi bi-broadcast"></i> Tester la connexion
+            </button>
+          </div>
+          <div id="mqtt-panel-status" class="config-status"></div>
+        </div>
+      </div>`;
+  }
+
+  function _mqttFieldRow(field, item) {
+    const val = escHtml(_mqttDraft[field.key] ?? '');
+    return `
+      <div class="flex-row mt-10" style="align-items:center; gap:8px;">
+        <label style="min-width:150px">${escHtml(field.label)}</label>
+        <input type="${field.type}" class="input-sm" value="${val}"
+               oninput="Config.mqttDraftSet('${field.key}', this.value)">
+        <span class="config-desc" style="margin:0">${escHtml(item?.description || field.desc)}</span>
+      </div>`;
+  }
+
+  function _mqttToggleRow(key, label) {
+    const on = _mqttDraft[key] === 'true';
+    return `
+      <div class="toggle-row">
+        <span class="toggle-label">${escHtml(label)}</span>
+        <label class="toggle">
+          <input type="checkbox" ${on ? 'checked' : ''}
+                 onchange="Config.mqttDraftToggle('${key}', this.checked)">
+          <span class="slider"></span>
+        </label>
+      </div>`;
+  }
+
+  function _rerenderMqttPanel() {
+    const el = document.getElementById('mqtt-panel');
+    if (el && _mqttItems) el.outerHTML = _mqttPanelHtml(_mqttItems);
+  }
+
+  function mqttDraftSet(key, value) {
+    if (_mqttDraft) _mqttDraft[key] = value;
+  }
+
+  function mqttDraftToggle(key, checked) {
+    if (!_mqttDraft) return;
+    _mqttDraft[key] = checked ? 'true' : 'false';
+    _rerenderMqttPanel();
+  }
+
+  async function saveMqttPanel() {
+    const statusEl = document.getElementById('mqtt-panel-status');
+    if (statusEl) { statusEl.className = 'config-status'; statusEl.textContent = 'Enregistrement…'; }
+    const keys = [...MQTT_FIELDS.map(f => f.key), 'mqtt_enabled',
+                  ...MQTT_PUBLISH_TOGGLES.map(t => t.key)];
+    let ok = true;
+    for (const key of keys) {
+      const item = _data.find(d => d.key === key);
+      const newVal = _mqttDraft[key] ?? '';
+      if (item && item.value === newVal) continue;
+      try {
+        const r = await fetch(`${API}/api/admin/config/${key}`, {
+          method: 'PUT',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({value: newVal}),
+        });
+        const d = await r.json();
+        if (d.success && item) item.value = newVal;
+        else if (!d.success) ok = false;
+      } catch(e) {
+        ok = false;
+      }
+    }
+    if (statusEl) {
+      statusEl.className = `config-status config-status-${ok ? 'ok' : 'error'}`;
+      statusEl.textContent = ok ? 'Paramètres enregistrés' : 'Erreur lors de l\'enregistrement';
+      setTimeout(() => { statusEl.className = 'config-status'; statusEl.textContent = ''; }, 3000);
+    }
   }
 
   function _cardHtml(item) {
@@ -277,6 +432,32 @@ const Config = (() => {
     el.textContent = msg;
   }
 
-  return { load, addExt, removeExt, saveToggle, saveField, addTag, removeTag };
+  /* ── MQTT ─────────────────────────────────────────────────────────────── */
+  function _setMqttPanelStatus(type, msg) {
+    const el = document.getElementById('mqtt-panel-status');
+    if (!el) return;
+    el.className = `config-status${type ? ' config-status-' + type : ''}`;
+    el.textContent = msg;
+  }
+
+  async function testMqtt() {
+    _setMqttPanelStatus('', 'Test en cours…');
+    try {
+      const r = await fetch(`${API}/api/admin/mqtt/test`, {method: 'POST'});
+      const d = await r.json();
+      if (r.ok) {
+        _setMqttPanelStatus('ok', d.message ?? 'OK');
+      } else {
+        _setMqttPanelStatus('error', d.detail ?? 'Erreur');
+      }
+    } catch(e) {
+      _setMqttPanelStatus('error', e.message);
+    }
+  }
+
+  return {
+    load, addExt, removeExt, saveToggle, saveField, addTag, removeTag, testMqtt,
+    mqttDraftSet, mqttDraftToggle, saveMqttPanel,
+  };
 
 })();

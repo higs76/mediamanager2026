@@ -10,6 +10,7 @@ Service de gestion de fichiers vidéo : surveillance de NAS (SMB/NFS), détectio
 - **Interface bibliothèque** — navigation catégories → titres → épisodes, filtres, recherche, marquer comme vu, détail technique complet
 - **Interface renommage** — validation des propositions titre par titre, édition inline, aperçu en temps réel
 - **Interface admin** — dashboard, gestion des montages, configuration, logs, mise à jour via GitHub
+- **Intégration MQTT / Home Assistant** — publication des indicateurs (santé du service, bibliothèque, jobs, montages NAS) via MQTT Discovery, activables par bloc depuis l'admin
 - **Thèmes** — dark / light / auto
 
 ---
@@ -113,6 +114,44 @@ Fichier : `/home/mediamanager/app/.env`
 
 ---
 
+## MQTT / Home Assistant
+
+Publication optionnelle d'indicateurs MediaManager vers un broker MQTT, avec
+découverte automatique des entités côté Home Assistant (**MQTT Discovery** — aucune
+configuration YAML nécessaire côté HA).
+
+Réglages dans l'admin → **Config** → bloc **MQTT** (description, interrupteur
+principal, champs de connexion, interrupteurs de publication par bloc) :
+
+| Réglage | Description | Effet |
+|---|---|---|
+| `mqtt_enabled` | Active le publisher persistant | redémarrage requis |
+| `mqtt_host` / `mqtt_port` / `mqtt_username` / `mqtt_password` | Connexion au broker | redémarrage requis |
+| `mqtt_topic_prefix` | Préfixe des topics (défaut `mediamanager`) | redémarrage requis |
+| `mqtt_publish_interval_seconds` | Fréquence de republication de l'état | redémarrage requis |
+| `mqtt_publish_library` / `mqtt_publish_jobs` / `mqtt_publish_mounts` | Active/désactive un bloc de capteurs | pris en compte immédiatement |
+
+Le bouton **"Tester la connexion"** publie un message ponctuel sur
+`<prefix>/test`, indépendamment de `mqtt_enabled`.
+
+Quatre blocs d'entités, toutes regroupées sous un même appareil **"MediaManager
+2026"** côté HA :
+- **Santé** — disponibilité (online/offline via *Last Will and Testament*, détection
+  immédiate d'une coupure), version, uptime, taille de la base PostgreSQL.
+- **Bibliothèque** — titres, fichiers, fichiers manquants, corbeille récupérable,
+  taille totale et par catégorie.
+- **Jobs** — statut scanner/analyseur/catalogueur (« en cours » ou date du dernier
+  run), propositions de renommage en attente.
+- **Montages NAS** — nombre monté/total, pourcentage (pour un `gauge` coloré).
+
+Implémentation : `watcher/mqtt_client.py` (`MqttQueue`, connexion persistante
+démarrée/arrêtée dans le lifespan de `watcher/app.py`, comme les autres files
+d'arrière-plan). Les données réutilisent les fonctions déjà calculées pour l'admin
+(`get_library_stats_dict()`, `get_jobs_status_dict()`, `get_mounts_status_dict()`) —
+aucune requête SQL dupliquée.
+
+---
+
 ## Structure du projet
 
 ```
@@ -135,7 +174,9 @@ mediamanager2026/
 │   │   ├── stats.py             # Statistiques qualité, jobs
 │   │   ├── system.py            # Config, update, version, logs
 │   │   ├── auth.py               # Login, logout, session, initialisation setup
-│   │   └── users.py              # CRUD utilisateurs, rôles, propositions de renommage utilisateur
+│   │   ├── users.py              # CRUD utilisateurs, rôles, propositions de renommage utilisateur
+│   │   └── mqtt.py               # Endpoint de test MQTT (bouton admin)
+│   ├── mqtt_client.py            # Publisher MQTT persistant (MqttQueue) + MQTT Discovery
 │   └── utils/
 │       ├── perf.py              # Ring buffer monitoring performances SQL
 │       ├── versioning.py        # git info, GitHub releases
@@ -220,22 +261,22 @@ Tables principales :
 
 | Suffixe | Branche | Visibilité |
 |---|---|---|
-| `0.6.0` | `main` | Tous les utilisateurs |
-| `0.6.0-dev` | `dev` | Développeur uniquement (`ALLOW_PRERELEASE=true`) |
+| `0.6.1` | `main` | Tous les utilisateurs |
+| `0.6.1-dev` | `dev` | Développeur uniquement (`ALLOW_PRERELEASE=true`) |
 
 ### Publier une nouvelle version
 
 ```bash
 # Branche dev → pre-release
-git tag v0.6.0-dev
-git push origin v0.6.0-dev
+git tag v0.6.1-dev
+git push origin v0.6.1-dev
 # Sur GitHub : Create release → cocher "Pre-release"
 
 # Branche main → release stable
 git checkout main && git merge dev
-echo "0.6.0" > VERSION
-git tag v0.6.0
-git push origin main && git push origin v0.6.0
+echo "0.6.1" > VERSION
+git tag v0.6.1
+git push origin main && git push origin v0.6.1
 # Sur GitHub : Create release → NE PAS cocher "Pre-release"
 git checkout dev && git merge main
 ```
@@ -257,5 +298,6 @@ git checkout dev && git merge main
 - [x] Phase 5 — Assistant de configuration initiale (`/setup`) et page de connexion (`/login`)
 - [x] Phase 5 — Normalisation des pistes audio/sous-titres, codecs, HDR et langues (tables de référence)
 - [x] Phase 5 — Support du contenu bonus et des fichiers multi-épisodes dans le catalogue
+- [x] Phase 6 — Publication MQTT vers Home Assistant (MQTT Discovery), santé/bibliothèque/jobs/montages
 - [ ] Tests d'intégration
 - [ ] Champs audio en arrays PostgreSQL natifs (TEXT[])
