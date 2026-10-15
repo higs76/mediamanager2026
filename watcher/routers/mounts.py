@@ -382,22 +382,28 @@ def list_mounts():
         raise HTTPException(500, err)
 
 
+def get_mounts_status_dict() -> dict:
+    """État des montages NAS actifs (montés/manquants).
+    Réutilisé par /mounts/status et par le publisher MQTT (watcher/mqtt_client.py)."""
+    with engine.connect() as conn:
+        rows = conn.execute(text("""
+            SELECT m.id, m.local_path, c.name
+            FROM mounts m JOIN categories c ON c.id = m.category_id
+            WHERE m.active = true
+        """)).mappings().fetchall()
+    status  = [{"id": r["id"], "local_path": r["local_path"], "category": r["name"],
+                "is_mounted": _is_mounted(r["local_path"])} for r in rows]
+    mounted = sum(1 for s in status if s["is_mounted"])
+    return {
+        "total": len(status), "mounted": mounted,
+        "missing": len(status) - mounted, "mounts": status
+    }
+
+
 @router.get("/mounts/status")
 def mounts_status():
     try:
-        with engine.connect() as conn:
-            rows = conn.execute(text("""
-                SELECT m.id, m.local_path, c.name
-                FROM mounts m JOIN categories c ON c.id = m.category_id
-                WHERE m.active = true
-            """)).mappings().fetchall()
-        status  = [{"id": r["id"], "local_path": r["local_path"], "category": r["name"],
-                    "is_mounted": _is_mounted(r["local_path"])} for r in rows]
-        mounted = sum(1 for s in status if s["is_mounted"])
-        return JSONResponse({
-            "total": len(status), "mounted": mounted,
-            "missing": len(status) - mounted, "mounts": status
-        })
+        return JSONResponse(get_mounts_status_dict())
     except Exception as e:
         raise HTTPException(500, str(e))
 

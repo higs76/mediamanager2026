@@ -14,6 +14,7 @@ import time as _time
 
 from watcher.database import engine
 from watcher.utils.perf import record as _perf
+from watcher.cataloger import catalog_queue
 
 logger = logging.getLogger(__name__)
 
@@ -274,84 +275,90 @@ def files_quality_stats(cat_id: int = None):
         raise HTTPException(500, str(e))
 
 
+def get_jobs_status_dict() -> dict:
+    """État actuel des 3 jobs : scanner, analyser, catalogueur.
+    Réutilisé par /jobs/status et par le publisher MQTT (watcher/mqtt_client.py)."""
+    with engine.connect() as conn:
+
+        last_scan = conn.execute(text("""
+            SELECT j.status, j.started_at, j.finished_at,
+                   j.files_found, j.files_new, m.local_path
+            FROM scan_jobs j
+            JOIN mounts m ON m.id = j.mount_id
+            ORDER BY j.created_at DESC LIMIT 1
+        """)).mappings().fetchone()
+
+        running_session = conn.execute(text("""
+            SELECT status, folder_path, files_done, files_total, started_at
+            FROM analyze_sessions
+            WHERE status = 'running'
+            ORDER BY started_at DESC LIMIT 1
+        """)).mappings().fetchone()
+
+        last_session = conn.execute(text("""
+            SELECT status, folder_path, files_done, files_total, finished_at
+            FROM analyze_sessions
+            WHERE status = 'done'
+            ORDER BY finished_at DESC LIMIT 1
+        """)).mappings().fetchone()
+
+        analyze_stats = conn.execute(text("""
+            SELECT
+                COUNT(*) FILTER (WHERE status='done')    as done,
+                COUNT(*) FILTER (WHERE status='pending') as pending,
+                COUNT(*) FILTER (WHERE status='running') as running,
+                COUNT(*) FILTER (WHERE status='error')   as error
+            FROM analyze_sessions
+        """)).mappings().fetchone()
+
+        catalog_stats = conn.execute(text("""
+            SELECT
+                COUNT(*) FILTER (WHERE folder_status='ok')        as ok,
+                COUNT(*) FILTER (WHERE folder_status='to_rename') as to_rename,
+                COUNT(*) FILTER (WHERE folder_status='pending')   as pending
+            FROM media_titles
+        """)).mappings().fetchone()
+
+        proposals_pending = conn.execute(text("""
+            SELECT COUNT(*) FROM rename_proposals WHERE status='pending'
+        """)).fetchone()[0]
+
+    def _fmt(dt):
+        return str(dt)[:19] if dt else None
+
+    return {
+        "scanner": {
+            "last_status":   last_scan["status"]      if last_scan else None,
+            "last_started":  _fmt(last_scan["started_at"])  if last_scan else None,
+            "last_finished": _fmt(last_scan["finished_at"]) if last_scan else None,
+            "files_found":   last_scan["files_found"] if last_scan else 0,
+            "files_new":     last_scan["files_new"]   if last_scan else 0,
+            "last_mount":    last_scan["local_path"].split('/')[-1] if last_scan else None,
+        },
+        "analyzer": {
+            "running":          running_session is not None,
+            "current_folder":   running_session["folder_path"]  if running_session else None,
+            "current_done":     running_session["files_done"]   if running_session else 0,
+            "current_total":    running_session["files_total"]  if running_session else 0,
+            "last_folder":      last_session["folder_path"]     if last_session else None,
+            "last_finished":    _fmt(last_session["finished_at"]) if last_session else None,
+            "sessions_done":    analyze_stats["done"]    if analyze_stats else 0,
+            "sessions_pending": analyze_stats["pending"] if analyze_stats else 0,
+        },
+        "cataloger": {
+            "titles_ok":         catalog_stats["ok"]        if catalog_stats else 0,
+            "titles_to_rename":  catalog_stats["to_rename"] if catalog_stats else 0,
+            "titles_pending":    catalog_stats["pending"]   if catalog_stats else 0,
+            "proposals_pending": proposals_pending,
+            **catalog_queue.get_status(),
+        },
+    }
+
+
 @router.get("/jobs/status")
 def jobs_status():
-    """État actuel des 3 jobs : scanner, analyser, catalogueur."""
     try:
-        with engine.connect() as conn:
-
-            last_scan = conn.execute(text("""
-                SELECT j.status, j.started_at, j.finished_at,
-                       j.files_found, j.files_new, m.local_path
-                FROM scan_jobs j
-                JOIN mounts m ON m.id = j.mount_id
-                ORDER BY j.created_at DESC LIMIT 1
-            """)).mappings().fetchone()
-
-            running_session = conn.execute(text("""
-                SELECT status, folder_path, files_done, files_total, started_at
-                FROM analyze_sessions
-                WHERE status = 'running'
-                ORDER BY started_at DESC LIMIT 1
-            """)).mappings().fetchone()
-
-            last_session = conn.execute(text("""
-                SELECT status, folder_path, files_done, files_total, finished_at
-                FROM analyze_sessions
-                WHERE status = 'done'
-                ORDER BY finished_at DESC LIMIT 1
-            """)).mappings().fetchone()
-
-            analyze_stats = conn.execute(text("""
-                SELECT
-                    COUNT(*) FILTER (WHERE status='done')    as done,
-                    COUNT(*) FILTER (WHERE status='pending') as pending,
-                    COUNT(*) FILTER (WHERE status='running') as running,
-                    COUNT(*) FILTER (WHERE status='error')   as error
-                FROM analyze_sessions
-            """)).mappings().fetchone()
-
-            catalog_stats = conn.execute(text("""
-                SELECT
-                    COUNT(*) FILTER (WHERE folder_status='ok')        as ok,
-                    COUNT(*) FILTER (WHERE folder_status='to_rename') as to_rename,
-                    COUNT(*) FILTER (WHERE folder_status='pending')   as pending
-                FROM media_titles
-            """)).mappings().fetchone()
-
-            proposals_pending = conn.execute(text("""
-                SELECT COUNT(*) FROM rename_proposals WHERE status='pending'
-            """)).fetchone()[0]
-
-        def _fmt(dt):
-            return str(dt)[:19] if dt else None
-
-        return JSONResponse({
-            "scanner": {
-                "last_status":   last_scan["status"]      if last_scan else None,
-                "last_started":  _fmt(last_scan["started_at"])  if last_scan else None,
-                "last_finished": _fmt(last_scan["finished_at"]) if last_scan else None,
-                "files_found":   last_scan["files_found"] if last_scan else 0,
-                "files_new":     last_scan["files_new"]   if last_scan else 0,
-                "last_mount":    last_scan["local_path"].split('/')[-1] if last_scan else None,
-            },
-            "analyzer": {
-                "running":          running_session is not None,
-                "current_folder":   running_session["folder_path"]  if running_session else None,
-                "current_done":     running_session["files_done"]   if running_session else 0,
-                "current_total":    running_session["files_total"]  if running_session else 0,
-                "last_folder":      last_session["folder_path"]     if last_session else None,
-                "last_finished":    _fmt(last_session["finished_at"]) if last_session else None,
-                "sessions_done":    analyze_stats["done"]    if analyze_stats else 0,
-                "sessions_pending": analyze_stats["pending"] if analyze_stats else 0,
-            },
-            "cataloger": {
-                "titles_ok":         catalog_stats["ok"]        if catalog_stats else 0,
-                "titles_to_rename":  catalog_stats["to_rename"] if catalog_stats else 0,
-                "titles_pending":    catalog_stats["pending"]   if catalog_stats else 0,
-                "proposals_pending": proposals_pending,
-            },
-        })
+        return JSONResponse(get_jobs_status_dict())
     except Exception as e:
         logger.error(f"jobs_status: {e}")
         raise HTTPException(500, str(e))

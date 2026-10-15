@@ -73,6 +73,82 @@ def update_config(key: str, data: dict = Body(...)):
 
 # ── Dashboard ─────────────────────────────────────────────────────────────────
 
+def get_library_stats_dict() -> dict:
+    """Compteurs bibliothèque (fichiers, titres, taille, corbeille récupérable).
+    Réutilisé par /dashboard et par le publisher MQTT (watcher/mqtt_client.py)."""
+    try:
+        with engine.connect() as conn:
+            status_rows = conn.execute(text("""
+                SELECT status, disk_status, COUNT(*)
+                FROM media_files
+                GROUP BY status, disk_status
+            """)).fetchall()
+            total_files     = sum(r[2] for r in status_rows)
+            analyzed_files  = sum(r[2] for r in status_rows if r[0] == 'analyzed')
+            missing_files   = sum(r[2] for r in status_rows if r[1] == 'missing')
+            duplicate_files = sum(r[2] for r in status_rows if r[1] == 'duplicate')
+
+            size_row = conn.execute(text(
+                "SELECT ROUND(SUM(size_bytes)/1099511627776::numeric, 2) FROM media_files"
+            )).fetchone()
+            total_tb = float(size_row[0] or 0)
+
+            # Retourne total_seconds pour que le frontend utilise formatDuration()
+            titles_row = conn.execute(text("""
+                SELECT
+                    COUNT(DISTINCT SPLIT_PART(path_relative, '/', 1)) as nb_titles,
+                    COALESCE(SUM(vm.duration_seconds), 0)               as total_seconds
+                FROM media_files mf
+                LEFT JOIN video_metadata vm ON vm.file_id = mf.id
+                WHERE mf.status = 'analyzed'
+            """)).fetchone()
+            nb_titles     = int(titles_row[0] or 0)
+            total_seconds = int(titles_row[1] or 0)
+
+            trash_row = conn.execute(text(
+                "SELECT COALESCE(SUM(size_bytes),0) FROM trash_folders"
+            )).fetchone()
+            trash_bytes = int(trash_row[0] or 0)
+
+            cat_size_rows = conn.execute(text("""
+                SELECT c.name, ROUND(COALESCE(SUM(mf.size_bytes), 0)/1099511627776::numeric, 2) as tb
+                FROM categories c
+                LEFT JOIN mounts m ON m.category_id = c.id
+                LEFT JOIN media_files mf ON mf.mount_id = m.id
+                GROUP BY c.name
+                ORDER BY c.name
+            """)).mappings().fetchall()
+            by_category_tb = [{"name": r["name"], "tb": float(r["tb"] or 0)} for r in cat_size_rows]
+
+            return {
+                "total_files":     total_files,
+                "analyzed_files":  analyzed_files,
+                "missing_files":   missing_files,
+                "duplicate_files": duplicate_files,
+                "total_tb":        total_tb,
+                "nb_titles":       nb_titles,
+                "total_seconds":   total_seconds,
+                "trash_bytes":     trash_bytes,
+                "by_category_tb":  by_category_tb,
+            }
+    except Exception as e:
+        logger.warning(f"get_library_stats_dict: {e}")
+        return {}
+
+
+def get_db_size_mb() -> float:
+    """Taille de la base PostgreSQL en Mo. Utilisé par le publisher MQTT."""
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(text(
+                "SELECT pg_database_size(current_database())"
+            )).fetchone()
+        return round((row[0] or 0) / 1048576, 1)
+    except Exception as e:
+        logger.warning(f"get_db_size_mb: {e}")
+        return 0.0
+
+
 @router.get("/dashboard")
 def get_dashboard():
     """Retourne le dashboard complet pour l'Admin Panel."""
@@ -154,51 +230,10 @@ def get_dashboard():
                 dead, live = int(dead_row[0]), int(dead_row[1])
                 pg_stats["dead_tup"] = dead
                 pg_stats["bloat_pct"] = round(dead * 100.0 / (dead + live), 1) if (dead + live) > 0 else 0.0
-
-            status_rows = conn.execute(text("""
-                SELECT status, disk_status, COUNT(*)
-                FROM media_files
-                GROUP BY status, disk_status
-            """)).fetchall()
-            total_files     = sum(r[2] for r in status_rows)
-            analyzed_files  = sum(r[2] for r in status_rows if r[0] == 'analyzed')
-            missing_files   = sum(r[2] for r in status_rows if r[1] == 'missing')
-            duplicate_files = sum(r[2] for r in status_rows if r[1] == 'duplicate')
-
-            size_row = conn.execute(text(
-                "SELECT ROUND(SUM(size_bytes)/1099511627776::numeric, 2) FROM media_files"
-            )).fetchone()
-            total_tb = float(size_row[0] or 0)
-
-            # Retourne total_seconds pour que le frontend utilise formatDuration()
-            titles_row = conn.execute(text("""
-                SELECT
-                    COUNT(DISTINCT SPLIT_PART(path_relative, '/', 1)) as nb_titles,
-                    COALESCE(SUM(vm.duration_seconds), 0)               as total_seconds
-                FROM media_files mf
-                LEFT JOIN video_metadata vm ON vm.file_id = mf.id
-                WHERE mf.status = 'analyzed'
-            """)).fetchone()
-            nb_titles     = int(titles_row[0] or 0)
-            total_seconds = int(titles_row[1] or 0)
-
-            trash_row = conn.execute(text(
-                "SELECT COALESCE(SUM(size_bytes),0) FROM trash_folders"
-            )).fetchone()
-            trash_bytes = int(trash_row[0] or 0)
-
-            library_stats = {
-                "total_files":     total_files,
-                "analyzed_files":  analyzed_files,
-                "missing_files":   missing_files,
-                "duplicate_files": duplicate_files,
-                "total_tb":        total_tb,
-                "nb_titles":       nb_titles,
-                "total_seconds":   total_seconds,
-                "trash_bytes":     trash_bytes,
-            }
     except Exception as e:
-        logger.warning(f"get_dashboard library_stats: {e}")
+        logger.warning(f"get_dashboard pg_stats: {e}")
+
+    library_stats = get_library_stats_dict()
 
     return JSONResponse({
         "version":          app_version,
